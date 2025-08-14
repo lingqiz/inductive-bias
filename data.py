@@ -1,4 +1,34 @@
 import numpy as np
+from itertools import combinations_with_replacement
+
+
+def polynomial_expend(X, degree):
+    """
+    Expand features to polynomial space.
+
+    Args:
+        X: Input data of shape (m, n) where m is number of samples, n is number of features
+        degree: Degree of polynomial expansion (k)
+
+    Returns:
+        Expanded feature matrix of shape (m, num_expanded_features)
+    """
+    m, n = X.shape
+
+    # Generate all combinations of features up to the specified degree
+    features = []
+
+    # Start with degree 1 (original features)
+    for d in range(1, degree + 1):
+        # Get all combinations with replacement for degree d
+        for combo in combinations_with_replacement(range(n), d):
+            # Compute the product of features for this combination
+            feature_col = np.ones(m)
+            for feature_idx in combo:
+                feature_col *= X[:, feature_idx]
+            features.append(feature_col)
+
+    return np.column_stack(features)
 
 
 class Gaussian2D:

@@ -63,20 +63,25 @@ class LinearSeparable:
                 self.b = b
                 break
 
-    def sample(self, m, noise_rate=0.05, seed=None):
+    def sample(self, m, noise_rate=0.05, seed=None, both_classes=False):
         if seed is not None:
             np.random.seed(seed)
 
-        # Sample M points in N-dimensional space bounded by [-k, k]
-        X = np.random.uniform(-self.k, self.k, size=(m, self.n))
+        while True:
+            # Sample M points in N-dimensional space bounded by [-k, k]
+            X = np.random.uniform(-self.k, self.k, size=(m, self.n))
 
-        # Label points based on saved decision boundary
-        y = (X @ self.a + self.b >= 0).astype(int)
+            # Label points based on saved decision boundary
+            y = (X @ self.a + self.b >= 0).astype(int)
 
-        # Add label noise
-        n_flip = int(noise_rate * m)
-        flip_indices = np.random.choice(m, n_flip, replace=False)
-        y[flip_indices] = 1 - y[flip_indices]
+            # Add label noise
+            n_flip = int(noise_rate * m)
+            flip_indices = np.random.choice(m, n_flip, replace=False)
+            y[flip_indices] = 1 - y[flip_indices]
+
+            # Check if both classes are present
+            if not both_classes or (len(np.unique(y)) == 2):
+                break
 
         # Shuffle
         indices = np.arange(m)
@@ -86,8 +91,8 @@ class LinearSeparable:
 
         return X, y
 
-    def __call__(self, m, noise_rate=0.05, seed=None):
-        return self.sample(m, noise_rate, seed)
+    def __call__(self, m, noise_rate=0.05, seed=None, both_classes=False):
+        return self.sample(m, noise_rate, seed, both_classes)
 
     def get_boundary(self):
         return self.a.copy(), self.b

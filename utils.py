@@ -161,19 +161,20 @@ class ConvergenceCurve():
         self.error = error
         return self.train_size, self.error
 
-    def plot_error(self, ax):
+    def plot_error(self, ax, log_scale=True):
         # plot generalization error as a function of training set size
         ax.plot(self.train_size, self.error, marker='o', markersize=6)
 
-        ax.set_xscale('log', base=2)
-        ax.set_yscale('log', base=2)
-        ax.minorticks_off()
+        if log_scale:
+            ax.set_xscale('log', base=2)
+            ax.set_yscale('log', base=2)
+            ax.minorticks_off()
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+            ax.yaxis.set_major_formatter(ScalarFormatter())
+            ax.ticklabel_format(style='plain', axis='y')
 
         ax.set_xlabel('training set size (m)')
         ax.set_ylabel(r'$ \epsilon = L_D(h)$')
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
-        ax.yaxis.set_major_formatter(ScalarFormatter())
-        ax.ticklabel_format(style='plain', axis='y')
 
     def plot_gap(self, ax, piecewise=False):
         # plot generalization gap as a function of log training set size

@@ -30,6 +30,17 @@ def polynomial_expend(X, degree):
 
     return np.column_stack(features)
 
+def polyexp_func(degree, distribution):
+    '''
+    Create a wrapper function that applies polynomial expansion to any distribution function.
+    '''
+    def wrapper(m):
+        X, y = distribution(m)
+        X_expanded = polynomial_expend(X, degree)
+        return X_expanded, y
+
+    return wrapper
+
 
 class Gaussian2D:
     def __init__(self, params=None):
@@ -45,7 +56,8 @@ class Gaussian2D:
         else:
             self.params = params
 
-    def sample(self, n, seed=None):
+    def sample(self, n, seed=None, noise_rate=None, both_classes=True):
+        # noise_rate and both_classes is not used in this distribution
         if seed is not None:
             np.random.seed(seed)
 
@@ -61,8 +73,8 @@ class Gaussian2D:
 
         return X, y
 
-    def __call__(self, n, seed=None):
-        return self.sample(n, seed)
+    def __call__(self, n, seed=None, noise_rate=None, both_classes=True):
+        return self.sample(n, seed, noise_rate, both_classes)
 
 
 class LinearSeparable:

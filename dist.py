@@ -138,3 +138,72 @@ class LinearSeparable:
 
     def get_boundary(self):
         return self.a.copy(), self.b
+
+
+class PolySeparable:
+    def __init__(self, n, degree, k=1.0, seed=None):
+        self.n = n
+        self.degree = degree
+        self.k = k
+        self.a = None
+        self.b = None
+
+        if seed is not None:
+            np.random.seed(seed)
+
+        # Generate decision boundary in polynomial space with balanced classes
+        while True:
+            # Sample test points to check balance
+            X_test = np.random.uniform(-k, k, size=(1024, n))
+            X_test_poly = polynomial_expend(X_test, degree)
+
+            # Generate random decision boundary: a^T x_poly + b >= 0
+            poly_dim = X_test_poly.shape[1]
+            a = np.random.randn(poly_dim)
+            a = a / np.linalg.norm(a)  # normalize
+            b = np.random.uniform(-k, k)
+
+            # Check class balance on test points
+            y_test = (X_test_poly @ a + b >= 0).astype(int)
+            class_ratio = np.mean(y_test)
+            if 0.4 <= class_ratio <= 0.6:
+                self.a = a
+                self.b = b
+                break
+
+    def sample(self, m, noise_rate=0.05, seed=None, both_classes=False):
+        if seed is not None:
+            np.random.seed(seed)
+
+        while True:
+            # Sample M points in N-dimensional space bounded by [-k, k]
+            X = np.random.uniform(-self.k, self.k, size=(m, self.n))
+
+            # Expand to polynomial features
+            X_poly = polynomial_expend(X, self.degree)
+
+            # Label points based on saved decision boundary in polynomial space
+            y = (X_poly @ self.a + self.b >= 0).astype(int)
+
+            # Add label noise
+            n_flip = int(noise_rate * m)
+            flip_indices = np.random.choice(m, n_flip, replace=False)
+            y[flip_indices] = 1 - y[flip_indices]
+
+            # Check if both classes are present
+            if not both_classes or (len(np.unique(y)) == 2):
+                break
+
+        # Shuffle
+        indices = np.arange(m)
+        np.random.shuffle(indices)
+        X = X[indices]
+        y = y[indices]
+
+        return X, y
+
+    def __call__(self, m, noise_rate=0.05, seed=None, both_classes=False):
+        return self.sample(m, noise_rate, seed, both_classes)
+
+    def get_boundary(self):
+        return self.a.copy(), self.b

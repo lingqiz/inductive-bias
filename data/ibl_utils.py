@@ -1,14 +1,15 @@
 import numpy as np
 import pandas as pd
 from typing import Dict, Tuple
+import os
 
 # Generated with Claude Code
-def load_behavior_data(csv_path: str) -> Tuple[Dict[str, Dict[str, np.ndarray]], Dict[str, str], list]:
+def load_behavior_data(csv_path=None) -> Tuple[Dict[str, Dict[str, np.ndarray]], Dict[str, str], list]:
     """
     Load behavioral data from CSV into a simple nested dictionary structure.
 
     Args:
-        csv_path: Path to the CSV file
+        csv_path: Path to the CSV file (defaults to 'ibl_behavior.csv' in same directory as this file)
 
     Returns:
         Tuple of:
@@ -21,6 +22,10 @@ def load_behavior_data(csv_path: str) -> Tuple[Dict[str, Dict[str, np.ndarray]],
         2. Mapping from subject_id back to original subject_uuid
         3. List of column names for the 2D array
     """
+    if csv_path is None:
+        # Default path to the CSV file
+        csv_path = os.path.join(os.path.dirname(__file__), 'ibl_behavior.csv')
+
     df = pd.read_csv(csv_path)
 
     # Create mapping from UUID to simple ID

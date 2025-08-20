@@ -57,6 +57,8 @@ def load_behavior_data(csv_path=None) -> Tuple[Dict[str, Dict[str, np.ndarray]],
 def block_average(sub_data):
     '''
     sub_data: a list of data matrices for each subject
+    columns are [(0) training_day, (1) n_trials_date,
+                (2) performance, (3) performance_easy]
     '''
     n_max = 0
     for sub in sub_data:

@@ -98,7 +98,7 @@ def interpolate_average(sub_data, m_max=35000):
     for m in m_trials:
         n_steps.append(np.sum(m <= m_max))
         n_trials += m[0]
-    n_steps = np.ceil(np.median(n_steps))
+    n_steps = np.ceil(np.quantile(n_steps, 0.841))
     n_trials = np.ceil(n_trials / len(m_trials))
 
     # compute average function

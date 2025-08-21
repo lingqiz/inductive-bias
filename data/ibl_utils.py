@@ -121,3 +121,25 @@ def interpolate_average(sub_data, m_max=35000, quantile=0.841):
     p_average = np.nanmean(p_interpolated, axis=0)
 
     return m_average, p_average
+
+
+def find_threshold(performance, threshold=0.8, min_days=3):
+    """
+    Find the earliest training day where performance consistently stays above threshold.
+
+    Args:
+        performance: 1D array of performance values (one per training day)
+        threshold: Performance threshold (default 0.8 for 80%)
+        min_days: Number of consecutive days above threshold required (default 3)
+
+    Returns:
+        int or float: Training day index where learning criterion is met, or np.inf if never met
+    """
+    if len(performance) < min_days:
+        return np.inf
+
+    for i in range(len(performance) - min_days + 1):
+        if np.all(performance[i:i + min_days] >= threshold):
+            return i
+
+    return np.inf

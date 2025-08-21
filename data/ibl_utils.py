@@ -80,7 +80,7 @@ def block_average(sub_data):
     return n_trials, p_correct
 
 
-def interpolate_average(sub_data, m_max=35000):
+def interpolate_average(sub_data, m_max=35000, quantile=0.841):
     m_trials = []
     p_correct = []
 
@@ -93,16 +93,16 @@ def interpolate_average(sub_data, m_max=35000):
         p_correct.append(p_correct_sub)
 
     # setup sample points
-    n_steps = []
+    n_days = []
     n_trials = 0
     for m in m_trials:
-        n_steps.append(np.sum(m <= m_max))
+        n_days.append(np.sum(m <= m_max))
         n_trials += m[0]
-    n_steps = np.ceil(np.quantile(n_steps, 0.841))
+    n_days = np.ceil(np.quantile(n_days, quantile))
     n_trials = np.ceil(n_trials / len(m_trials))
 
     # compute average function
-    m_average = np.linspace(int(n_trials), m_max, int(n_steps))
+    m_average = np.linspace(int(n_trials), m_max, int(n_days))
 
     # interpolate each subject's performance onto common grid
     p_interpolated = []

@@ -78,3 +78,46 @@ def block_average(sub_data):
     p_correct = n_correct / n_trials
     n_trials = n_trials / n_avg
     return n_trials, p_correct
+
+
+def interpolate_average(sub_data, m_max=35000):
+    m_trials = []
+    p_correct = []
+
+    # individual p_correct as a function of m_trials
+    for sub in sub_data:
+        n_trials = sub[:, 1]
+        p_correct_sub = sub[:, 3]
+
+        m_trials.append(np.cumsum(n_trials))
+        p_correct.append(p_correct_sub)
+
+    # setup sample points
+    n_steps = []
+    n_trials = 0
+    for m in m_trials:
+        n_steps.append(np.sum(m <= m_max))
+        n_trials += m[0]
+    n_steps = np.ceil(np.median(n_steps))
+    n_trials = np.ceil(n_trials / len(m_trials))
+
+    # compute average function
+    m_average = np.linspace(int(n_trials), m_max, int(n_steps))
+
+    # interpolate each subject's performance onto common grid
+    p_interpolated = []
+    for i, (m_sub, p_sub) in enumerate(zip(m_trials, p_correct)):
+        # only interpolate within the range of this subject's data
+        m_sub_max = m_sub[-1]
+        mask = (m_average <= m_sub_max)
+
+        if np.any(mask):
+            p_interp = np.full(len(m_average), np.nan)
+            p_interp[mask] = np.interp(m_average[mask], m_sub, p_sub)
+            p_interpolated.append(p_interp)
+
+    # average across subjects (ignoring NaN values)
+    p_interpolated = np.array(p_interpolated)
+    p_average = np.nanmean(p_interpolated, axis=0)
+
+    return m_average, p_average

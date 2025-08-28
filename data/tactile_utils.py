@@ -1,7 +1,3 @@
-"""
-Tactile behavior data utilities for loading and processing MATLAB data files.
-"""
-
 import os
 from typing import List, Any, Tuple
 import scipy.io
@@ -98,16 +94,19 @@ def sliding_window(decision: np.ndarray, window_size: int = 128, step_size: int 
         nogo_trials = cr + fa
         total_trials = go_trials + nogo_trials
 
+        # Compute statistics
         trial_centers.append(start + window_size // 2)
         acc_rates.append((hit + cr) / total_trials if total_trials > 0 else 0)
 
         hit_rate = hit / go_trials if go_trials > 0 else 0
+        cr_rate = cr / nogo_trials if nogo_trials > 0 else 0
         fa_rate = fa / nogo_trials if nogo_trials > 0 else 0
+        miss_rate = miss / go_trials if go_trials > 0 else 0
 
         hit_rates.append(hit_rate)
-        cr_rates.append(cr / nogo_trials if nogo_trials > 0 else 0)
+        cr_rates.append(cr_rate)
         fa_rates.append(fa_rate)
-        miss_rates.append(miss / go_trials if go_trials > 0 else 0)
+        miss_rates.append(miss_rate)
 
         # Calculate d-prime: Z(hit_rate) - Z(false_alarm_rate)
         # Clip rates to avoid infinite values from norm.ppf
@@ -117,8 +116,7 @@ def sliding_window(decision: np.ndarray, window_size: int = 128, step_size: int 
         dprimes.append(dprime)
 
     return (np.array(trial_centers), np.array(acc_rates), np.array(hit_rates),
-            np.array(cr_rates), np.array(fa_rates), np.array(miss_rates),
-            np.array(dprimes))
+            np.array(cr_rates), np.array(fa_rates), np.array(miss_rates), np.array(dprimes))
 
 
 def sliding_window_group(decision_sequences: list, window_size: int = 128, step_size: int = 16):
@@ -168,16 +166,19 @@ def sliding_window_group(decision_sequences: list, window_size: int = 128, step_
         total_trials = go_trials + nogo_trials
 
         if total_trials > 0:  # Only add if we have data
+            # Compute statistics
             trial_centers.append(start + window_size // 2)
             acc_rates.append((all_hits + all_cr) / total_trials)
 
             hit_rate = all_hits / go_trials if go_trials > 0 else 0
+            cr_rate = all_cr / nogo_trials if nogo_trials > 0 else 0
             fa_rate = all_fa / nogo_trials if nogo_trials > 0 else 0
+            miss_rate = all_misses / go_trials if go_trials > 0 else 0
 
             hit_rates.append(hit_rate)
-            cr_rates.append(all_cr / nogo_trials if nogo_trials > 0 else 0)
+            cr_rates.append(cr_rate)
             fa_rates.append(fa_rate)
-            miss_rates.append(all_misses / go_trials if go_trials > 0 else 0)
+            miss_rates.append(miss_rate)
 
             # Calculate d-prime: Z(hit_rate) - Z(false_alarm_rate)
             # Clip rates to avoid infinite values from norm.ppf
@@ -187,6 +188,5 @@ def sliding_window_group(decision_sequences: list, window_size: int = 128, step_
             dprimes.append(dprime)
 
     return (np.array(trial_centers), np.array(acc_rates), np.array(hit_rates),
-            np.array(cr_rates), np.array(fa_rates), np.array(miss_rates),
-            np.array(dprimes))
+            np.array(cr_rates), np.array(fa_rates), np.array(miss_rates), np.array(dprimes))
 

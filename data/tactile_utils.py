@@ -6,6 +6,7 @@ import os
 from typing import List, Any, Tuple
 import scipy.io
 import numpy as np
+from scipy.stats import norm
 
 
 def load_tactile_data(data_path: str = None) -> Tuple[List[str], List[Any], List[Any]]:
@@ -72,7 +73,7 @@ def sliding_window(decision: np.ndarray, window_size: int = 128, step_size: int 
         step_size: Step size for sliding window
 
     Returns:
-        Arrays of trial_center, acc_rate, hit_rate, cr_rate, fa_rate, miss_rate
+        Arrays of trial_center, acc_rate, hit_rate, cr_rate, fa_rate, miss_rate, dprime
     """
     n_trials = len(decision)
     trial_centers = []
@@ -81,6 +82,7 @@ def sliding_window(decision: np.ndarray, window_size: int = 128, step_size: int 
     cr_rates = []
     fa_rates = []
     miss_rates = []
+    dprimes = []
 
     for start in range(0, n_trials - window_size + 1, step_size):
         end = start + window_size
@@ -98,13 +100,25 @@ def sliding_window(decision: np.ndarray, window_size: int = 128, step_size: int 
 
         trial_centers.append(start + window_size // 2)
         acc_rates.append((hit + cr) / total_trials if total_trials > 0 else 0)
-        hit_rates.append(hit / go_trials if go_trials > 0 else 0)
+
+        hit_rate = hit / go_trials if go_trials > 0 else 0
+        fa_rate = fa / nogo_trials if nogo_trials > 0 else 0
+
+        hit_rates.append(hit_rate)
         cr_rates.append(cr / nogo_trials if nogo_trials > 0 else 0)
-        fa_rates.append(fa / nogo_trials if nogo_trials > 0 else 0)
+        fa_rates.append(fa_rate)
         miss_rates.append(miss / go_trials if go_trials > 0 else 0)
 
+        # Calculate d-prime: Z(hit_rate) - Z(false_alarm_rate)
+        # Clip rates to avoid infinite values from norm.ppf
+        hit_rate_clipped = np.clip(hit_rate, 0.001, 0.999)
+        fa_rate_clipped = np.clip(fa_rate, 0.001, 0.999)
+        dprime = norm.ppf(hit_rate_clipped) - norm.ppf(fa_rate_clipped)
+        dprimes.append(dprime)
+
     return (np.array(trial_centers), np.array(acc_rates), np.array(hit_rates),
-            np.array(cr_rates), np.array(fa_rates), np.array(miss_rates))
+            np.array(cr_rates), np.array(fa_rates), np.array(miss_rates),
+            np.array(dprimes))
 
 
 def sliding_window_group(decision_sequences: list, window_size: int = 128, step_size: int = 16):
@@ -117,7 +131,7 @@ def sliding_window_group(decision_sequences: list, window_size: int = 128, step_
         step_size: Step size for sliding window
 
     Returns:
-        Arrays of trial_center, acc_rate, hit_rate, cr_rate, fa_rate, miss_rate
+        Arrays of trial_center, acc_rate, hit_rate, cr_rate, fa_rate, miss_rate, dprime
     """
     # Find the maximum length to determine window positions
     max_length = max(len(seq) for seq in decision_sequences)
@@ -128,6 +142,7 @@ def sliding_window_group(decision_sequences: list, window_size: int = 128, step_
     cr_rates = []
     fa_rates = []
     miss_rates = []
+    dprimes = []
 
     for start in range(0, max_length - window_size + 1, step_size):
         end = start + window_size
@@ -155,11 +170,23 @@ def sliding_window_group(decision_sequences: list, window_size: int = 128, step_
         if total_trials > 0:  # Only add if we have data
             trial_centers.append(start + window_size // 2)
             acc_rates.append((all_hits + all_cr) / total_trials)
-            hit_rates.append(all_hits / go_trials if go_trials > 0 else 0)
+
+            hit_rate = all_hits / go_trials if go_trials > 0 else 0
+            fa_rate = all_fa / nogo_trials if nogo_trials > 0 else 0
+
+            hit_rates.append(hit_rate)
             cr_rates.append(all_cr / nogo_trials if nogo_trials > 0 else 0)
-            fa_rates.append(all_fa / nogo_trials if nogo_trials > 0 else 0)
+            fa_rates.append(fa_rate)
             miss_rates.append(all_misses / go_trials if go_trials > 0 else 0)
 
+            # Calculate d-prime: Z(hit_rate) - Z(false_alarm_rate)
+            # Clip rates to avoid infinite values from norm.ppf
+            hit_rate_clipped = np.clip(hit_rate, 0.001, 0.999)
+            fa_rate_clipped = np.clip(fa_rate, 0.001, 0.999)
+            dprime = norm.ppf(hit_rate_clipped) - norm.ppf(fa_rate_clipped)
+            dprimes.append(dprime)
+
     return (np.array(trial_centers), np.array(acc_rates), np.array(hit_rates),
-            np.array(cr_rates), np.array(fa_rates), np.array(miss_rates))
+            np.array(cr_rates), np.array(fa_rates), np.array(miss_rates),
+            np.array(dprimes))
 

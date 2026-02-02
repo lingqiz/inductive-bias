@@ -140,10 +140,10 @@ class ConvergenceCurve():
 
     def run(self):
         error = np.zeros(len(self.train_size))
+        error_sd = np.zeros(len(self.train_size))
         for i in range(len(self.train_size)):
             m = self.train_size[i]
-            accuracy = 0.0
-
+            test_error = []
             for _ in range(self.n_repeat):
                 # sample data
                 X_S, y_S = self.distribution(m)
@@ -154,16 +154,19 @@ class ConvergenceCurve():
 
                 # predict on the test set
                 pred = lc.predict(self.X_D)
-                accuracy += np.mean(pred == self.y_D)
+                test_error.append(1 - np.mean(pred == self.y_D))                
 
-            error[i] = (1 - accuracy / self.n_repeat)
+            error[i] = np.mean(test_error)
+            error_sd[i] = np.std(test_error)
 
         self.error = error
-        return self.train_size, self.error
+        self.error_sd = error_sd
+        return self.train_size, self.error, self.error_sd
 
     def plot_error(self, ax, log_scale=True):
         # plot generalization error as a function of training set size
-        ax.plot(self.train_size, self.error, marker='o', markersize=6)
+        ax.errorbar(self.train_size, self.error, yerr=self.error_sd,
+                    marker='o', markersize=6, capsize=4)
 
         if log_scale:
             ax.set_xscale('log', base=2)
@@ -187,7 +190,7 @@ class ConvergenceCurve():
             log_m = log_m[:-1]  # exclude last point
             log_gap = np.log2(error_gap[:-1])
         else:
-            error_gap = self.error - self.asmp_error
+            error_gap = self.error - self.asmp_error            
             log_gap = np.log2(error_gap)
 
         l = ax.plot(log_m, log_gap, marker='o', markersize=6)

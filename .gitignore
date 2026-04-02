@@ -1,5 +1,7 @@
 # User-defined
+/data
 /notebook
+/.claude
 *.csv
 *.ipynb
 *.mat

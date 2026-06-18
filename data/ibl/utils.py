@@ -9,7 +9,7 @@ def load_behavior_data(csv_path=None) -> Tuple[Dict[str, Dict[str, np.ndarray]],
     Load behavioral data from CSV into a simple nested dictionary structure.
 
     Args:
-        csv_path: Path to the CSV file (defaults to 'ibl_behavior.csv' in same directory as this file)
+        csv_path: Path to the CSV file (defaults to 'behavior.csv' in same directory as this file)
 
     Returns:
         Tuple of:
@@ -24,7 +24,7 @@ def load_behavior_data(csv_path=None) -> Tuple[Dict[str, Dict[str, np.ndarray]],
     """
     if csv_path is None:
         # Default path to the CSV file
-        csv_path = os.path.join(os.path.dirname(__file__), 'ibl_behavior.csv')
+        csv_path = os.path.join(os.path.dirname(__file__), 'behavior.csv')
 
     df = pd.read_csv(csv_path)
 
@@ -143,3 +143,71 @@ def find_threshold(performance, threshold=0.8, min_days=3):
             return i
 
     return np.inf
+
+
+# ---------------------------------------------------------------------------
+# Raw end-to-end-complete cohort
+#
+# Same nested-dict interface as load_behavior_data(), but sourced from the raw
+# ALF dataset (via the raw backend) and restricted to animals whose raw data covers
+# every CSV training day. block_average / interpolate_average / find_threshold
+# all work unchanged on the result (column 3 is performance_easy, as before).
+# ---------------------------------------------------------------------------
+
+_COMPLETE_FLAG = {'choice': 'end_to_end_choice', 'wheel': 'end_to_end_wheel'}
+_COVERAGE_CSV = os.path.join(os.path.dirname(__file__), 'cache', 'coverage_qc_report.csv')
+
+
+def _import_raw():
+    """Import the raw backend module whether utils was imported as
+    ``data.ibl.utils`` (relative) or ``utils`` (data/ibl/ on sys.path)."""
+    try:
+        from . import raw
+    except (ImportError, ValueError):
+        import raw
+    return raw
+
+
+def complete_subjects(level='wheel', report_csv=None):
+    """Subject nicknames whose raw data is end-to-end complete vs the CSV.
+
+    Args:
+        level: 'wheel'  -> full choice AND wheel coverage every CSV day (55 mice)
+               'choice' -> full choice coverage every CSV day (66 mice)
+        report_csv: path to a cached coverage_qc_report.csv; if missing it is
+                    recomputed via raw.coverage_qc_report().
+
+    Returns:
+        set of subject_nickname strings.
+    """
+    report_csv = report_csv or _COVERAGE_CSV
+    if os.path.exists(report_csv):
+        rep = pd.read_csv(report_csv)
+    else:
+        rep = _import_raw().coverage_qc_report(verbose=False)
+    return set(rep.loc[rep[_COMPLETE_FLAG[level]], 'subject'])
+
+
+def load_behavior_complete(level='wheel', report_csv=None):
+    """Load the end-to-end-complete raw cohort in load_behavior_data() format.
+
+    Args:
+        level: 'wheel' (55 mice, choice+wheel) or 'choice' (66 mice, choice).
+
+    Returns:
+        (data, id_to_subject, column_names) where ``data`` is
+        {institution_code: {subject_id: 2D array
+            [training_day, n_trials_date, performance, performance_easy]}},
+        restricted to the complete subjects. ``id_to_subject`` maps the
+        synthetic subject ids back to nicknames.
+    """
+    keep = complete_subjects(level, report_csv=report_csv)
+    data, id2nick, cols = _import_raw().load_behavior_raw(verbose=False)
+
+    out, id_out = {}, {}
+    for inst, subs in data.items():
+        kept = {sid: arr for sid, arr in subs.items() if id2nick.get(sid) in keep}
+        if kept:
+            out[inst] = kept
+            id_out.update({sid: id2nick[sid] for sid in kept})
+    return out, id_out, cols

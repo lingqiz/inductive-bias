@@ -1,9 +1,146 @@
+import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator, ScalarFormatter
+from scipy.optimize import curve_fit
+
+
+def _loglog_seed(m, y):
+    """Rough (alpha, d) seed for a power-law fit from a log-log OLS.
+
+    Assumes y = (d/m)**alpha, so log y = alpha*log d - alpha*log m -- a line in
+    log-log with slope = -alpha and intercept = alpha*log d. Points with
+    non-positive/non-finite m or y are dropped. The cap (if any) is ignored here;
+    this only provides an initial guess for the nonlinear fit.
+    """
+    m = np.asarray(m, float).ravel()
+    y = np.asarray(y, float).ravel()
+    ok = (m > 0) & (y > 0) & np.isfinite(m) & np.isfinite(y)
+    slope, intercept = np.polyfit(np.log(m[ok]), np.log(y[ok]), 1)
+    alpha = max(-slope, 1e-3)
+    d = float(np.exp(intercept / alpha))
+    return alpha, d
+
+
+class PACBayesCurve:
+    """Theory-derived learning curve g(m) = (2/3)*phi/m + (2*phi/m)**alpha.
+
+    Fitted parameters are phi > 0 (complexity scale) and alpha > 0 (exponent).
+    Optionally caps the error rate at ``cap`` (e.g. 0.5 = chance): the returned
+    error is min(g(m), cap), applied both when fitting and when predicting.
+
+    The fit minimizes the linear least-squares residual on the raw error rate,
+    Sum (g(m_i) - y_i)**2, where m is cumulative trials and y is the error rate.
+    """
+
+    def __init__(self, cap=None):
+        self.cap = cap
+        self.params = None
+        self.fitted = False
+
+    def _curve(self, m, phi, alpha):
+        m = np.asarray(m, float)
+        g = (2.0 / 3.0) * phi / m + (2.0 * phi / m) ** alpha
+        return np.minimum(g, self.cap) if self.cap is not None else g
+
+    def fit(self, m, y, p0=None):
+        """Fit phi, alpha to data (m = cumulative trials, y = error rate)."""
+        m = np.asarray(m, float).ravel()
+        y = np.asarray(y, float).ravel()
+
+        if p0 is None:
+            # seed alpha from a log-log slope; phi ~ d/2 since at large m the
+            # power-law term (2*phi/m)**alpha matches (d/m)**alpha when d = 2*phi
+            a0, d0 = _loglog_seed(m, y)
+            p0 = [max(d0 / 2.0, 1e-6), a0]
+
+        popt, _ = curve_fit(self._curve, m, y, p0=p0,
+                            bounds=([0.0, 0.0], [np.inf, np.inf]), maxfev=20000)
+        phi, alpha = popt
+        rss = float(np.sum((self._curve(m, *popt) - y) ** 2))
+        self.params = {'phi': float(phi), 'alpha': float(alpha),
+                       'cap': self.cap, 'rss': rss}
+        self.fitted = True
+        return self
+
+    def predict(self, m):
+        """Predicted error rate at trial counts ``m`` using the fitted model."""
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet. Call fit() first.")
+        return self._curve(m, self.params['phi'], self.params['alpha'])
+
+    def get_params(self):
+        """Return fitted parameters."""
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet. Call fit() first.")
+        return self.params.copy()
+
+
+class PowerLawCurve:
+    """Phenomenological power-law learning curve g(m) = (d/m)**alpha.
+
+    Fitted parameters are d > 0 (trials-to-scale) and alpha > 0 (exponent).
+    Optionally caps the error rate at ``cap`` (e.g. 0.5 = chance): the returned
+    error is min(g(m), cap), applied both when fitting and when predicting.
+
+    The fit minimizes the linear least-squares residual on the raw error rate,
+    Sum (g(m_i) - y_i)**2, where m is cumulative trials and y is the error rate.
+    """
+
+    def __init__(self, cap=None):
+        self.cap = cap
+        self.params = None
+        self.fitted = False
+
+    def _curve(self, m, d, alpha):
+        m = np.asarray(m, float)
+        g = (d / m) ** alpha
+        return np.minimum(g, self.cap) if self.cap is not None else g
+
+    def fit(self, m, y, p0=None):
+        """Fit d, alpha to data (m = cumulative trials, y = error rate)."""
+        m = np.asarray(m, float).ravel()
+        y = np.asarray(y, float).ravel()
+
+        if p0 is None:
+            a0, d0 = _loglog_seed(m, y)
+            p0 = [max(d0, 1e-6), a0]
+
+        popt, _ = curve_fit(self._curve, m, y, p0=p0,
+                            bounds=([0.0, 0.0], [np.inf, np.inf]), maxfev=20000)
+        d, alpha = popt
+        rss = float(np.sum((self._curve(m, *popt) - y) ** 2))
+        self.params = {'d': float(d), 'alpha': float(alpha),
+                       'cap': self.cap, 'rss': rss}
+        self.fitted = True
+        return self
+
+    def predict(self, m):
+        """Predicted error rate at trial counts ``m`` using the fitted model."""
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet. Call fit() first.")
+        return self._curve(m, self.params['d'], self.params['alpha'])
+
+    def get_params(self):
+        """Return fitted parameters."""
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet. Call fit() first.")
+        return self.params.copy()
+
 
 class PiecewiseLinear:
+    """.. deprecated::
+        Use :class:`PACBayesCurve` or :class:`PowerLaw` for learning-curve
+        fitting. Retained only for backward compatibility; no longer used for
+        empirical learning-curve analysis.
+    """
+
     def __init__(self):
+        warnings.warn(
+            "PiecewiseLinear is deprecated; use PACBayesCurve or PowerLawCurve "
+            "for learning-curve fitting.",
+            DeprecationWarning, stacklevel=2,
+        )
         self.params = None
         self.fitted = False
 

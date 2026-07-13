@@ -407,6 +407,18 @@ def iter_sessions(subject=None, csv_subset=True, root=RAW_ROOT, load=False):
         yield s
 
 
+def subject_sessions(subject, csv_subset=True, root=RAW_ROOT):
+    """Return the list of :class:`Session` for one subject, ordered by training day.
+
+    Ascending, matching the training-day structure used in the learning-curve
+    analysis, so ``subject_sessions(subj)[-1]`` is the last training day. Trials are
+    lazy (call ``.load_trials()`` / ``.wheel()`` to read). Sessions sharing a training
+    day are ordered by date then acquisition number.
+    """
+    sessions = iter_sessions(subject=subject, csv_subset=csv_subset, root=root)
+    return sorted(sessions, key=lambda s: (s.training_day, s.date, s.number))
+
+
 # ---------------------------------------------------------------------------
 # CSV-compatible reductions (for validation against the existing notebook)
 # ---------------------------------------------------------------------------

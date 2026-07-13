@@ -22,64 +22,60 @@ def _loglog_seed(m, y):
     return alpha, d
 
 
+def _gof(pred, y):
+    """Goodness-of-fit stats for a fitted curve: ``rss`` and ``r2``.
+
+    ``r2`` is the fraction of variance explained, 1 - SS_res/SS_tot -- comparable
+    across animals (unlike raw rss, which grows with the number of points).
+    """
+    resid = y - pred
+    ss_res = float(np.sum(resid ** 2))
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float('nan')
+    return {'rss': ss_res, 'r2': float(r2)}
+
+
 class PACBayesCurve:
     """Theory-derived learning curve g(m) = floor + (2/3)*phi/m + (2*phi/m)**alpha.
 
     Fitted parameters are phi > 0 (complexity scale) and alpha > 0 (exponent).
-    ``floor`` is the asymptotic error as m -> inf: pass a number (default 0.0) to
-    hold it fixed, or ``floor=None`` to fit it as a third parameter -- useful for
-    individual animals whose error plateaus above 0. Optionally caps the error at
-    ``cap`` (e.g. 0.5 = chance): the returned error is min(g(m), cap), applied both
-    when fitting and when predicting.
+    ``floor`` is the asymptotic error as m -> inf; it is held FIXED at the value
+    passed (default 0.0) -- pass a per-animal estimate to model a non-zero plateau.
+    Optionally caps the error at ``cap`` (e.g. 0.5 = chance): the returned error is
+    min(g(m), cap), applied both when fitting and when predicting.
 
     The fit minimizes the linear least-squares residual on the raw error rate,
     Sum (g(m_i) - y_i)**2, where m is cumulative trials and y is the error rate.
+    ``params`` also reports ``rss`` and ``r2`` (fraction of variance explained).
     """
 
     def __init__(self, cap=None, floor=0.0):
         self.cap = cap
-        self._fit_floor = floor is None
-        self.floor = 0.0 if floor is None else float(floor)
+        self.floor = float(floor)
         self.params = None
         self.fitted = False
 
-    def _curve(self, m, phi, alpha, floor):
+    def _curve(self, m, phi, alpha):
         m = np.asarray(m, float)
-        g = floor + (2.0 / 3.0) * phi / m + (2.0 * phi / m) ** alpha
+        g = self.floor + (2.0 / 3.0) * phi / m + (2.0 * phi / m) ** alpha
         return np.minimum(g, self.cap) if self.cap is not None else g
 
     def fit(self, m, y, p0=None):
-        """Fit phi, alpha (and floor if enabled) to data (m = cumulative trials,
-        y = error rate)."""
+        """Fit phi, alpha to data (m = cumulative trials, y = error rate)."""
         m = np.asarray(m, float).ravel()
         y = np.asarray(y, float).ravel()
 
-        fl_hi = self.cap if self.cap is not None else 0.5
         if p0 is None:
-            f0 = (float(np.clip(np.nanmin(y), 0.0, fl_hi * 0.99))
-                  if self._fit_floor else self.floor)
             # seed alpha/phi from the floor-subtracted curve; phi ~ d/2 since at
             # large m the term (2*phi/m)**alpha matches (d/m)**alpha when d = 2*phi
-            a0, d0 = _loglog_seed(m, np.clip(y - f0, 1e-6, None))
+            a0, d0 = _loglog_seed(m, np.clip(y - self.floor, 1e-6, None))
             p0 = [max(d0 / 2.0, 1e-6), a0]
-            if self._fit_floor:
-                p0 = p0 + [f0]
 
-        if self._fit_floor:
-            popt, _ = curve_fit(self._curve, m, y, p0=p0,
-                                bounds=([0.0, 0.0, 0.0], [np.inf, np.inf, fl_hi]),
-                                maxfev=20000)
-            phi, alpha, floor = popt
-        else:
-            fn = lambda mm, phi, alpha: self._curve(mm, phi, alpha, self.floor)
-            popt, _ = curve_fit(fn, m, y, p0=p0,
-                                bounds=([0.0, 0.0], [np.inf, np.inf]), maxfev=20000)
-            phi, alpha = popt
-            floor = self.floor
-
-        rss = float(np.sum((self._curve(m, phi, alpha, floor) - y) ** 2))
-        self.params = {'phi': float(phi), 'alpha': float(alpha),
-                       'floor': float(floor), 'cap': self.cap, 'rss': rss}
+        popt, _ = curve_fit(self._curve, m, y, p0=p0,
+                            bounds=([0.0, 0.0], [np.inf, np.inf]), maxfev=20000)
+        phi, alpha = popt
+        self.params = {'phi': float(phi), 'alpha': float(alpha), 'floor': self.floor,
+                       'cap': self.cap, **_gof(self._curve(m, *popt), y)}
         self.fitted = True
         return self
 
@@ -87,8 +83,7 @@ class PACBayesCurve:
         """Predicted error rate at trial counts ``m`` using the fitted model."""
         if not self.fitted:
             raise ValueError("Model has not been fitted yet. Call fit() first.")
-        p = self.params
-        return self._curve(m, p['phi'], p['alpha'], p['floor'])
+        return self._curve(m, self.params['phi'], self.params['alpha'])
 
     def get_params(self):
         """Return fitted parameters."""
@@ -101,58 +96,41 @@ class PowerLawCurve:
     """Phenomenological power-law learning curve g(m) = floor + (d/m)**alpha.
 
     Fitted parameters are d > 0 (trials-to-scale) and alpha > 0 (exponent).
-    ``floor`` is the asymptotic error as m -> inf: pass a number (default 0.0) to
-    hold it fixed, or ``floor=None`` to fit it as a third parameter -- useful for
-    individual animals whose error plateaus above 0. Optionally caps the error at
-    ``cap`` (e.g. 0.5 = chance): the returned error is min(g(m), cap), applied both
-    when fitting and when predicting.
+    ``floor`` is the asymptotic error as m -> inf; it is held FIXED at the value
+    passed (default 0.0) -- pass a per-animal estimate to model a non-zero plateau.
+    Optionally caps the error at ``cap`` (e.g. 0.5 = chance): the returned error is
+    min(g(m), cap), applied both when fitting and when predicting.
 
     The fit minimizes the linear least-squares residual on the raw error rate,
     Sum (g(m_i) - y_i)**2, where m is cumulative trials and y is the error rate.
+    ``params`` also reports ``rss`` and ``r2`` (fraction of variance explained).
     """
 
     def __init__(self, cap=None, floor=0.0):
         self.cap = cap
-        self._fit_floor = floor is None
-        self.floor = 0.0 if floor is None else float(floor)
+        self.floor = float(floor)
         self.params = None
         self.fitted = False
 
-    def _curve(self, m, d, alpha, floor):
+    def _curve(self, m, d, alpha):
         m = np.asarray(m, float)
-        g = floor + (d / m) ** alpha
+        g = self.floor + (d / m) ** alpha
         return np.minimum(g, self.cap) if self.cap is not None else g
 
     def fit(self, m, y, p0=None):
-        """Fit d, alpha (and floor if enabled) to data (m = cumulative trials,
-        y = error rate)."""
+        """Fit d, alpha to data (m = cumulative trials, y = error rate)."""
         m = np.asarray(m, float).ravel()
         y = np.asarray(y, float).ravel()
 
-        fl_hi = self.cap if self.cap is not None else 0.5
         if p0 is None:
-            f0 = (float(np.clip(np.nanmin(y), 0.0, fl_hi * 0.99))
-                  if self._fit_floor else self.floor)
-            a0, d0 = _loglog_seed(m, np.clip(y - f0, 1e-6, None))
+            a0, d0 = _loglog_seed(m, np.clip(y - self.floor, 1e-6, None))
             p0 = [max(d0, 1e-6), a0]
-            if self._fit_floor:
-                p0 = p0 + [f0]
 
-        if self._fit_floor:
-            popt, _ = curve_fit(self._curve, m, y, p0=p0,
-                                bounds=([0.0, 0.0, 0.0], [np.inf, np.inf, fl_hi]),
-                                maxfev=20000)
-            d, alpha, floor = popt
-        else:
-            fn = lambda mm, d, alpha: self._curve(mm, d, alpha, self.floor)
-            popt, _ = curve_fit(fn, m, y, p0=p0,
-                                bounds=([0.0, 0.0], [np.inf, np.inf]), maxfev=20000)
-            d, alpha = popt
-            floor = self.floor
-
-        rss = float(np.sum((self._curve(m, d, alpha, floor) - y) ** 2))
-        self.params = {'d': float(d), 'alpha': float(alpha),
-                       'floor': float(floor), 'cap': self.cap, 'rss': rss}
+        popt, _ = curve_fit(self._curve, m, y, p0=p0,
+                            bounds=([0.0, 0.0], [np.inf, np.inf]), maxfev=20000)
+        d, alpha = popt
+        self.params = {'d': float(d), 'alpha': float(alpha), 'floor': self.floor,
+                       'cap': self.cap, **_gof(self._curve(m, *popt), y)}
         self.fitted = True
         return self
 
@@ -160,8 +138,7 @@ class PowerLawCurve:
         """Predicted error rate at trial counts ``m`` using the fitted model."""
         if not self.fitted:
             raise ValueError("Model has not been fitted yet. Call fit() first.")
-        p = self.params
-        return self._curve(m, p['d'], p['alpha'], p['floor'])
+        return self._curve(m, self.params['d'], self.params['alpha'])
 
     def get_params(self):
         """Return fitted parameters."""

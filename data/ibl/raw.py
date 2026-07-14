@@ -31,6 +31,7 @@ Generated with Claude Code.
 """
 import os
 import glob
+import json
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -56,6 +57,14 @@ LAB_TO_INSTITUTION = {
 
 # IBL "easy" trials: |contrast| in {50%, 100%}.
 EASY_CONTRASTS = (0.5, 1.0)
+
+# Wheel/stimulus geometry (iblrig standard). The stimulus is driven to the
+# response boundary when the wheel turns enough to move it STIM_ANGLE_DEG of
+# visual angle at the session's gain (deg/mm); wheel angle = displacement / radius.
+#   threshold_rad = STIM_ANGLE_DEG / stim_gain / WHEEL_RADIUS_MM
+STIM_ANGLE_DEG = 35.0        # visual angle from center to response boundary
+WHEEL_RADIUS_MM = 31.0       # IBL wheel radius
+DEFAULT_STIM_GAIN = 4.0      # AG_MIN_VALUE; the value used once mice are trained
 
 # trials.table columns carried through (others dropped to keep frames lean).
 _TRIAL_COLS = [
@@ -135,6 +144,22 @@ def _wheel_paths(alf_dir):
         if os.path.getsize(t) == psize:
             return ps, t
     return ps, cands[0]
+
+
+def _read_settings(alf_dir):
+    """Load a session's iblrig task settings JSON, or None if absent.
+
+    Settings live in the sibling ``raw_behavior_data/`` of the ``alf/`` dir.
+    """
+    rbd = os.path.join(os.path.dirname(alf_dir), 'raw_behavior_data')
+    f = _find(rbd, '_iblrig_taskSettings.raw*.json')
+    if f is None:
+        return None
+    try:
+        with open(f) as fh:
+            return json.load(fh)
+    except (ValueError, OSError):
+        return None
 
 
 def _csv_subject_map():
@@ -300,10 +325,40 @@ class Session:
     trials: pd.DataFrame = None
     _wheel: tuple = field(default=None, repr=False)
     _wheel_moves: tuple = field(default=None, repr=False)
+    _settings: dict = field(default=None, repr=False)
 
     @property
     def session_id(self):
         return f'{self.subject}/{self.date}/{self.number}'
+
+    # --- rig settings ---
+    @property
+    def settings(self):
+        """iblrig task settings dict for this session (lazy, cached; {} if absent)."""
+        if self._settings is None:
+            self._settings = _read_settings(self.alf_dir) or {}
+        return self._settings
+
+    @property
+    def stim_gain(self):
+        """Stimulus/wheel gain (deg visual angle per mm of wheel), constant per session.
+
+        Read from the session's task settings ``STIM_GAIN``. Adaptive-gain
+        training sessions record 8 deg/mm on the mouse's first session and
+        4 deg/mm thereafter; biased/ephys sessions are always 4. Falls back to
+        ``DEFAULT_STIM_GAIN`` if settings are unavailable.
+        """
+        g = self.settings.get('STIM_GAIN')
+        return float(g) if g is not None else DEFAULT_STIM_GAIN
+
+    @property
+    def threshold_rad(self):
+        """Wheel angle (rad) that drives the stimulus to the response boundary.
+
+        ``STIM_ANGLE_DEG / stim_gain / WHEEL_RADIUS_MM``; adjusts automatically
+        for the higher gain on a mouse's first training session.
+        """
+        return STIM_ANGLE_DEG / self.stim_gain / WHEEL_RADIUS_MM
 
     # --- behaviour ---
     def load_trials(self):

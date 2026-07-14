@@ -1,5 +1,7 @@
+TODO: 
+refactor code for doing simulation (dist.py + utils.py) -> theory.py
+the outside utils.py should be used for curve fitting + model simulation
 
-### Dataset: IBL Behavior
-- Data from https://elifesciences.org/articles/63711
-- [Download Link](https://ibl.flatironinstitute.org/public/behavior_paper_data.zip)
-- Removed two rows that contained empty cell (NaN)
+dataset specific analysis code should be pushed into data/...
+
+add an analysis folder to keep track of important notebooks

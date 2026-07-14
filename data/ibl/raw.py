@@ -352,13 +352,29 @@ class Session:
         return float(g) if g is not None else DEFAULT_STIM_GAIN
 
     @property
-    def threshold_rad(self):
-        """Wheel angle (rad) that drives the stimulus to the response boundary.
+    def gain_scale(self):
+        """Factor mapping raw wheel angle -> gain-normalized angle.
 
-        ``STIM_ANGLE_DEG / stim_gain / WHEEL_RADIUS_MM``; adjusts automatically
-        for the higher gain on a mouse's first training session.
+        ``stim_gain / DEFAULT_STIM_GAIN``: 1.0 on a standard gain-4 session, 2.0 on a
+        gain-8 session (where only half the wheel angle reaches the boundary, so the
+        trace is doubled to be comparable).
         """
-        return STIM_ANGLE_DEG / self.stim_gain / WHEEL_RADIUS_MM
+        return self.stim_gain / DEFAULT_STIM_GAIN
+
+    def threshold_rad(self, gain_normalize=True):
+        """Wheel angle (rad) at the stimulus response boundary.
+
+        Returned in the SAME units as ``wheel(gain_normalize=...)``, so always pair
+        the two with the same flag:
+
+        - ``gain_normalize=True``  (default): the reference gain-4 boundary, a constant
+          ``STIM_ANGLE_DEG / DEFAULT_STIM_GAIN / WHEEL_RADIUS_MM`` = 0.282 rad. This is
+          the boundary for the *normalized* trace, so it is the same for every session.
+        - ``gain_normalize=False``: this session's physical boundary,
+          ``STIM_ANGLE_DEG / stim_gain / WHEEL_RADIUS_MM`` (0.282 at gain 4, 0.141 at gain 8).
+        """
+        gain = DEFAULT_STIM_GAIN if gain_normalize else self.stim_gain
+        return STIM_ANGLE_DEG / gain / WHEEL_RADIUS_MM
 
     # --- behaviour ---
     def load_trials(self):
@@ -371,14 +387,21 @@ class Session:
         return self.trials
 
     # --- wheel ---
-    def wheel(self):
-        """Return (timestamps[s], position[rad]) for the continuous wheel."""
+    def wheel(self, gain_normalize=True):
+        """Return (timestamps[s], position[rad]) for the continuous wheel.
+
+        With ``gain_normalize=True`` (default) the position is rescaled by
+        ``gain_scale`` to the reference gain-4 convention, so traces are directly
+        comparable across sessions (gain-8 sessions are doubled). Pair with
+        ``threshold_rad(gain_normalize=True)``. Pass False for raw physical angle.
+        """
         if self._wheel is None:
             ps, ts = _wheel_paths(self.alf_dir)
             if ts is None or ps is None:
                 raise FileNotFoundError(f'no wheel data in {self.alf_dir}')
             self._wheel = (np.load(ts), np.load(ps))
-        return self._wheel
+        wt, wp = self._wheel
+        return (wt, wp * self.gain_scale) if gain_normalize else (wt, wp)
 
     def has_wheel(self):
         return _find(self.alf_dir, '_ibl_wheel.position*.npy') is not None
@@ -395,20 +418,20 @@ class Session:
         return self._wheel_moves
 
     def trial_wheel(self, i, align='stimOn_times', t_pre=0.5, t_post=2.0,
-                    zero_position=True):
+                    zero_position=True, gain_normalize=True):
         """Slice the continuous wheel trace around one trial's event.
 
         Returns (t_rel, pos) where ``t_rel`` is time relative to the alignment
         event and ``pos`` is wheel position (optionally baselined to 0 at event
-        onset). This is the entry point for the kinematic analysis (smoothing /
-        velocity / threshold detection) to be built on top later.
+        onset). ``gain_normalize`` is passed through to :meth:`wheel`, so the
+        result is comparable to ``threshold_rad(gain_normalize=...)``.
         """
         if self.trials is None:
             self.load_trials()
         t0 = self.trials[align].iloc[i]
         if not np.isfinite(t0):
             return None
-        wt, wp = self.wheel()
+        wt, wp = self.wheel(gain_normalize=gain_normalize)
         m = (wt >= t0 - t_pre) & (wt <= t0 + t_post)
         t_rel = wt[m] - t0
         pos = wp[m].astype(float)

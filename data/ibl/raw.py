@@ -58,6 +58,26 @@ LAB_TO_INSTITUTION = {
 # IBL "easy" trials: |contrast| in {50%, 100%}.
 EASY_CONTRASTS = (0.5, 1.0)
 
+# CHOICE SIGN CONVENTION.
+# The raw ALF ``choice`` is signed OPPOSITE to both the stimulus side and the wheel movement:
+# raw choice = +1 goes with a stimulus on the LEFT and a NEGATIVE wheel displacement (verified:
+# median displacement at response = -0.282 rad for raw choice +1). We flip it on load so that
+# a single sign means the same thing everywhere:
+#
+#     choice = +1  <->  stimulus on the RIGHT      (signed_contrast > 0)
+#                  <->  wheel driven POSITIVE      (displacement -> +threshold_rad)
+#     correct      <->  choice == sign(signed_contrast)      (was: choice == -sign(...))
+#     boundary this trial drove to = +choice * threshold_rad (was: -choice * ...)
+#
+# Verified on the full 55-mouse cohort (684,693 easy responded trials, 3,018 sessions): the
+# raw relation `correct <=> raw_choice == -stim_side` holds with ZERO violations, so the flip
+# is safe and uniform. ``correct`` comes from feedbackType and is NOT affected by the flip.
+CHOICE_SIGN = -1
+
+# Bump when a change to _enrich_trials alters cached columns, so load_trials() cannot
+# silently serve a parquet built under the old convention.
+TRIALS_SCHEMA = 'v2'
+
 # Wheel/stimulus geometry (iblrig standard). The stimulus is driven to the
 # response boundary when the wheel turns enough to move it STIM_ANGLE_DEG of
 # visual angle at the session's gain (deg/mm); wheel angle = displacement / radius.
@@ -169,13 +189,17 @@ def _csv_subject_map():
 
 
 def _enrich_trials(df):
-    """Add signed/abs contrast, easy flag, correctness, reaction times in place."""
+    """Add signed/abs contrast, easy flag, correctness, reaction times in place.
+
+    NOTE ``choice`` is SIGN-FLIPPED relative to the raw ALF value (see CHOICE_SIGN).
+    """
     cl = df['contrastLeft'].fillna(0.0)
     cr = df['contrastRight'].fillna(0.0)
     df['signed_contrast'] = cr - cl            # + = stimulus on the right
     df['abs_contrast'] = cl + cr               # exactly one side is non-zero
     df['is_easy'] = df['abs_contrast'].round(4).isin(EASY_CONTRASTS)
     df['correct'] = (df['feedbackType'] == 1).astype(int)
+    df['choice'] = CHOICE_SIGN * df['choice']  # -> same sign as stimulus / wheel (see above)
     if {'response_times', 'stimOn_times'} <= set(df.columns):
         df['rt_response'] = df['response_times'] - df['stimOn_times']
     if {'firstMovement_times', 'stimOn_times'} <= set(df.columns):
@@ -261,7 +285,7 @@ def load_trials(csv_subset=True, root=RAW_ROOT, cache=True, verbose=True):
     Result is cached under ``data/cache/`` as a single parquet.
     """
     tag = 'csvsubset' if csv_subset else 'all'
-    cache_path = os.path.join(CACHE_DIR, f'trials_{tag}.parquet')
+    cache_path = os.path.join(CACHE_DIR, f'trials_{tag}_{TRIALS_SCHEMA}.parquet')
     if cache and os.path.exists(cache_path):
         if verbose:
             print(f'trials: loaded cache {os.path.relpath(cache_path)}')

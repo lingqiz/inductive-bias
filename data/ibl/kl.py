@@ -90,26 +90,35 @@ def log_col(v, eps):
 # Estimator + result
 # ---------------------------------------------------------------------------
 
-class PolicyKLResult:
-    """The per-stimulus-side KL terms for one animal, plus the intermediates.
+class KLResult:
+    """The naive->trained action-policy KL for one animal, in bits.
 
-    ``terms`` is ``{name: {+1: kl, -1: kl}}`` (bits); ``weights`` is the LATE
-    stimulus frequency per side. ``early`` / ``late`` (TrialSets), ``pca_side`` and
-    ``pc_early`` / ``pc_late`` (per-side PCA + scores) are kept for the diagnostic
-    plots. Combine a term over the stimulus with :meth:`reduce` / :meth:`summary`.
+    ``terms`` maps each term name to its per-stimulus-side KL(late || early)::
+
+        terms = {
+            'choice':   {+1: kl, -1: kl},   # response side               (discrete)
+            'onset':    {+1: kl, -1: kl},   # log movement onset          (1-D Gaussian)
+            'duration': {+1: kl, -1: kl},   # log movement duration       (1-D Gaussian)
+            'trace':    {+1: kl, -1: kl},   # folded-trace PC scores       (MVN)
+            'joint':    {+1: kl, -1: kl},   # [onset, duration, trace]    (joint MVN)
+        }
+
+    ``weights`` is the late (posterior) stimulus frequency per side,
+    ``{+1: w, -1: w}``, used to average the two sides. Read a term either raw
+    per-side or combined over the stimulus::
+
+        res.terms['joint']            # {+1: .., -1: ..}   (same as res.per_stim('joint'))
+        res.reduce('joint', 'max')    # sup over sides            (sup_s)
+        res.reduce('joint', 'mean')   # p(stim)-weighted average  (E_stim)
+        res.summary('mean')           # {name: value} for all five terms
     """
 
     TERMS = ('choice', 'onset', 'duration', 'trace', 'joint')
     _MODE = {'mean': 'mean', 'e': 'mean', 'max': 'max', 'sup': 'max'}
 
-    def __init__(self, terms, weights, early, late, pca_side, pc_early, pc_late):
+    def __init__(self, terms, weights):
         self.terms = terms
         self.weights = weights
-        self.early = early
-        self.late = late
-        self.pca_side = pca_side
-        self.pc_early = pc_early
-        self.pc_late = pc_late
 
     def per_stim(self, name):
         """Raw per-side values {+1: kl, -1: kl} for a term."""
@@ -175,8 +184,7 @@ class PolicyKL:
 
         sides = (+1, -1)
         weights = {s: float(np.mean(late.stim_side == s)) for s in sides}
-        terms = {name: {} for name in PolicyKLResult.TERMS}
-        pca_side, pc_early, pc_late = {}, {}, {}
+        terms = {name: {} for name in KLResult.TERMS}
 
         for s in sides:
             q_sel, p_sel = early.stim_side == s, late.stim_side == s
@@ -186,12 +194,9 @@ class PolicyKL:
                                            early.response_side[q_sel])
 
             # per-side PCA on the folded traces (common basis for early + late)
-            trace_q_raw = early.trace[q_sel]
-            trace_p_raw = late.trace[p_sel]
-            pca = PCA(n_components=self.k_pc).fit(np.vstack([trace_q_raw, trace_p_raw]))
-            trace_q = pca.transform(trace_q_raw)
-            trace_p = pca.transform(trace_p_raw)
-            pca_side[s], pc_early[s], pc_late[s] = pca, trace_q, trace_p
+            pca = PCA(n_components=self.k_pc).fit(np.vstack([early.trace[q_sel], late.trace[p_sel]]))
+            trace_q = pca.transform(early.trace[q_sel])
+            trace_p = pca.transform(late.trace[p_sel])
 
             # onset / duration: winsorized 1-D Gaussian KL on log-time
             onset_q, onset_p = log_col(early.onset[q_sel], self.eps), log_col(late.onset[p_sel], self.eps)
@@ -207,4 +212,4 @@ class PolicyKL:
             joint_p = np.column_stack([onset_p, dur_p, trace_p])
             terms['joint'][s] = gaussian_kl(joint_p, joint_q, self.winsor)
 
-        return PolicyKLResult(terms, weights, early, late, pca_side, pc_early, pc_late)
+        return KLResult(terms, weights)

@@ -224,6 +224,9 @@ def collect_trials(animal, n_trials=2000, from_end=False, easy_only=True,
         if from_end:
             sel = sel.iloc[::-1]                          # walk back within the session too
         wheel = s.wheel()
+        wt, wp = wheel
+        if wt.ndim != 1 or len(wt) != len(wp):   # malformed wheel (timestamps/position length
+            continue                             # mismatch, e.g. KS016 day 49); skip the session
         for _, row in sel.iterrows():
             m = measure_trial(s, row, wheel=wheel, t_tail=t_tail, v_thr=v_thr)
             if m is None:

@@ -261,6 +261,16 @@ class Animal:
         """Per-day easy-trial error rate (1 - performance_easy)."""
         return 1.0 - self.curve[:, 3]
 
+    def trials_to_criterion(self, threshold=0.84):
+        """Cumulative trials to first reach ``threshold`` easy-trial performance.
+
+        First-order (per-day) learning-speed estimate from the aggregate curve: the
+        cumulative trial count at the first training day whose performance_easy
+        reaches ``threshold``; ``np.inf`` if the animal never reaches it.
+        """
+        hit = np.flatnonzero(self.curve[:, 3] >= threshold)
+        return float(self.cum_trials[hit[0]]) if len(hit) else np.inf
+
     @property
     def alpha(self):
         """Fitted learning-curve exponent (None until fit_curve() is called)."""

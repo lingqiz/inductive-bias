@@ -428,7 +428,13 @@ class Session:
         return (wt, wp * self.gain_scale) if gain_normalize else (wt, wp)
 
     def has_wheel(self):
-        return _find(self.alf_dir, '_ibl_wheel.position*.npy') is not None
+        """True iff BOTH wheel position and timestamps files exist (what wheel() needs).
+
+        Some sessions ship a position file but no timestamps file; checking position
+        alone would make has_wheel() disagree with wheel() (which then raises).
+        """
+        ps, ts = _wheel_paths(self.alf_dir)
+        return ps is not None and ts is not None
 
     def wheel_moves(self):
         """Return (intervals[n,2], peakAmplitude[n]) from the IBL move detector."""

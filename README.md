@@ -4,4 +4,4 @@ the outside utils.py should be used for curve fitting + model simulation
 
 dataset specific analysis code should be pushed into data/...
 
-add an analysis folder to keep track of important notebooks
+add an /analysis folder to keep track of important notebooks

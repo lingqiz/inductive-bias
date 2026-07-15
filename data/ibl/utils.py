@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from typing import Dict, Tuple
+from dataclasses import dataclass, field
 import os
 
 # Generated with Claude Code
@@ -168,6 +169,8 @@ def _import_raw():
     return raw
 
 
+
+
 def complete_subjects(level='wheel', report_csv=None):
     """Subject nicknames whose raw data is end-to-end complete vs the CSV.
 
@@ -176,6 +179,11 @@ def complete_subjects(level='wheel', report_csv=None):
                'choice' -> full choice coverage every CSV day (66 mice)
         report_csv: path to a cached coverage_qc_report.csv; if missing it is
                     recomputed via raw.coverage_qc_report().
+
+    Note: the 11 'choice'-only mice (66 vs 55) DO have wheel data at every training
+    day; they just have a small chunk of wheel samples that fails strict wheel QC on a
+    few days. Their naive->trained ends are wheel-complete, so 'choice' is usable as the
+    wheel cohort for end-to-end (naive vs trained) analyses.
 
     Returns:
         set of subject_nickname strings.
@@ -211,3 +219,108 @@ def load_behavior_complete(level='wheel', report_csv=None):
             out[inst] = kept
             id_out.update({sid: id2nick[sid] for sid in kept})
     return out, id_out, cols
+
+
+# ---------------------------------------------------------------------------
+# Shared per-animal interface
+#
+# A single handle for the complete cohort, keyed by real subject nickname, that
+# both analyses build on: the learning-curve fit reads Animal.curve, the wheel /
+# kinematic analysis reads Animal.sessions(). Replaces the old two-call pattern
+# (complete_subjects + load_behavior_complete), which returned the SAME animals
+# under two different keys (nickname vs synthetic subject_NNN).
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Animal:
+    """One animal in the complete cohort, keyed by its real nickname.
+
+    ``curve`` is the per-day aggregate (columns :attr:`COLUMNS`), used for
+    learning-curve fitting; :meth:`sessions` lazily exposes the raw ALF sessions
+    (per-trial behaviour + continuous wheel) for kinematic analysis. Both share
+    the single, consistent ``subject`` key, so per-animal results from the two
+    analyses can be joined later.
+    """
+
+    COLUMNS = ('training_day', 'n_trials_date', 'performance', 'performance_easy')
+
+    subject: str                 # real nickname; the shared key everywhere
+    institution: str             # institution_code (e.g. 'Lab 5')
+    curve: np.ndarray            # per-day aggregate, columns = COLUMNS
+    uuid: str = None             # subject_uuid: the anonymized paper id
+    fit: dict = None             # learning-curve params, set by fit_curve()
+    _sessions: list = field(default=None, repr=False)
+
+    @property
+    def cum_trials(self):
+        """Cumulative trial count at the end of each training day."""
+        return np.cumsum(self.curve[:, 1])
+
+    @property
+    def error_easy(self):
+        """Per-day easy-trial error rate (1 - performance_easy)."""
+        return 1.0 - self.curve[:, 3]
+
+    @property
+    def alpha(self):
+        """Fitted learning-curve exponent (None until fit_curve() is called)."""
+        return self.fit.get('alpha') if self.fit else None
+
+    @property
+    def phi(self):
+        """Fitted complexity scale phi (None until fit_curve(); PACBayes only)."""
+        return self.fit.get('phi') if self.fit else None
+
+    @property
+    def r2(self):
+        """Goodness of fit of the recorded learning-curve fit."""
+        return self.fit.get('r2') if self.fit else None
+
+    def fit_curve(self, model, cap=0.5):
+        """Fit a learning-curve model and record its parameters on this Animal."""
+        self.fit = model(cap=cap).fit(self.cum_trials, self.error_easy).params
+        return self.fit
+
+    def sessions(self):
+        """Raw Session objects for this animal, ordered by training day (lazy)."""
+        if self._sessions is None:
+            self._sessions = _import_raw().subject_sessions(self.subject)
+        return self._sessions
+
+
+def nickname_to_uuid(csv_path=None):
+    """Map each subject_nickname -> subject_uuid (the anonymized paper id).
+
+    1:1 over the 140 CSV animals; use to report cohort results under the
+    anonymized identifier instead of the real nickname.
+    """
+    if csv_path is None:
+        csv_path = os.path.join(os.path.dirname(__file__), 'behavior.csv')
+    df = pd.read_csv(csv_path, usecols=['subject_nickname', 'subject_uuid'])
+    return dict(zip(df['subject_nickname'], df['subject_uuid']))
+
+
+def load_cohort(level='choice', report_csv=None):
+    """Load the end-to-end-complete cohort as ``{nickname: Animal}``.
+
+    Single shared entry point for both analyses (learning curve via
+    ``Animal.curve``, wheel via ``Animal.sessions()``), replacing the old
+    complete_subjects + load_behavior_complete pair. Each Animal also carries its
+    anonymized ``uuid`` (see :func:`nickname_to_uuid`).
+
+    Args:
+        level: 'choice' (66 mice, choice-complete) or 'wheel' (55 mice,
+               choice+wheel complete); see :func:`complete_subjects`.
+
+    Returns:
+        dict {subject_nickname: Animal}, ordered by institution then nickname.
+    """
+    data, id2nick, _ = load_behavior_complete(level, report_csv=report_csv)
+    nick2uuid = nickname_to_uuid()
+    cohort = {}
+    for inst, subs in data.items():
+        for sid, arr in subs.items():
+            nick = id2nick[sid]
+            cohort[nick] = Animal(subject=nick, institution=inst, curve=arr,
+                                  uuid=nick2uuid.get(nick))
+    return cohort

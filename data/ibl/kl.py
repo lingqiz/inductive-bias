@@ -24,12 +24,15 @@ Conventions (uniform across every term):
 
 Note: winsorize() clips each sample to ITS OWN percentiles, so the map is not
 strictly shared across the two groups -- the data-processing "lower bound"
-framing is therefore approximate. The covariance is used without a ridge; its
-conditioning relies on K = 10 and the winsorization (fine at ~1000 trials/side).
+framing is therefore approximate. The Gaussian-KL terms are analytically
+bias-corrected by default (``unbiased=True``): the plug-in KL is biased up by
+~k^2 / (2n), governed by the ratio k/n, so the correction matters once K is a
+non-trivial fraction of the per-side sample count (see :func:`gaussian_kl`).
 
 Generated with Claude Code.
 """
 import numpy as np
+from scipy.special import digamma
 from sklearn.decomposition import PCA
 
 from .wheel import collect_trials, DT, T_TAIL, V_THR
@@ -48,37 +51,74 @@ def winsorize(Z, pct):
     return np.clip(Z, lo, hi)
 
 
-def gaussian_kl(Zp, Zq, winsor):
+def _logdet_bias(k, nu):
+    """E[ln det S] - ln det Sigma for an unbiased sample covariance S with nu = n-1 dof.
+
+    Equals sum_{i=1..k} [psi((nu-i+1)/2) - ln(nu/2)] (< 0): the log-det of a sample
+    covariance is biased low. Subtract this from ln det(S) to recover ln det(Sigma).
+    """
+    i = np.arange(1, k + 1)
+    return float(np.sum(digamma((nu - i + 1) / 2.0) - np.log(nu / 2.0)))
+
+
+def gaussian_kl(Zp, Zq, winsor, unbiased=True):
     """KL(N(p) || N(q)) in bits, fitting an MVN (mean + covariance) to winsorized samples.
 
     p = late (posterior), q = early (prior); Zp, Zq are (n, k) score matrices. The
-    covariances are wrapped in ``np.atleast_2d`` so 1-D marginals (k = 1) also work.
+    covariances (np.cov, ddof=1) are wrapped in ``np.atleast_2d`` so 1-D marginals
+    (k = 1) also work.
+
+    With ``unbiased=True`` (default) the plug-in bias is removed analytically under the
+    Gaussian model -- the plug-in KL is biased UP by ~k^2 / (2 n) (dimension^2 over sample
+    size), dominated by the inflated inverse covariance E[S_q^-1] = n_q/(n_q-k-2) * Sigma_q^-1.
+    Three corrections (see derivation notes): (1) unbiased inverse A_q = (n_q-k-2)/(n_q-1)
+    * S_q^-1; (2) subtract the sample-mean-variance inflation tr(A_q S_p)/n_p + k/n_q from the
+    Mahalanobis term; (3) debias each log-det by _logdet_bias (cancels when n_p == n_q).
+    Requires k <= n-2 per group; returns nan otherwise (covariance under-determined).
     """
     Zp, Zq = winsorize(Zp, winsor), winsorize(Zq, winsor)
+    np_p, np_q = Zp.shape[0], Zq.shape[0]
     mp, mq = Zp.mean(0), Zq.mean(0)
     Sp = np.atleast_2d(np.cov(Zp, rowvar=False))
     Sq = np.atleast_2d(np.cov(Zq, rowvar=False))
     k = Zp.shape[1]
     Sq_inv = np.linalg.inv(Sq)
     d = mq - mp
+
+    # bias-corrected KL under the Gaussian model
+    if unbiased:
+        nu_p, nu_q = np_p - 1, np_q - 1
+        if nu_q - k - 1 <= 0 or nu_p <= 0:        # inverse under-determined -> can't debias
+            return np.nan
+        A = ((nu_q - k - 1) / nu_q) * Sq_inv       # unbiased estimate of Sigma_q^-1
+        tr_ASp = np.trace(A @ Sp)                  # unbiased tr(Sigma_q^-1 Sigma_p)
+        maha = d @ A @ d - tr_ASp / np_p - k / np_q          # debiased Mahalanobis
+        logdet = ((np.linalg.slogdet(Sq)[1] - _logdet_bias(k, nu_q))
+                  - (np.linalg.slogdet(Sp)[1] - _logdet_bias(k, nu_p)))
+        kl_nats = 0.5 * (tr_ASp + maha - k + logdet)
+        return float(kl_nats / np.log(2))
+
+    # no correction: plain plug-in KL
     kl_nats = 0.5 * (np.trace(Sq_inv @ Sp) + d @ Sq_inv @ d - k
                      + np.linalg.slogdet(Sq)[1] - np.linalg.slogdet(Sp)[1])
     return float(kl_nats / np.log(2))
 
 
-def choice_kl(resp_p, resp_q):
+def choice_kl(resp_p, resp_q, pseudo=0.5):
     """KL(late || early) in bits of the binary response-side distribution (+1 / -1).
 
-    ``resp_p`` / ``resp_q`` are arrays of +1 / -1 choices (late / early). Uses the
-    empirical proportions with 0*log0 = 0.
+    ``resp_p`` / ``resp_q`` are arrays of +1 / -1 choices (late / early). Each side's
+    probability uses a Jeffreys (add-``pseudo``) pseudocount, so a one-sided early
+    group (q_plus = 0 or 1) gives a finite KL instead of dividing by zero. This is
+    the discrete analog of the winsorization on the Gaussian terms: sample-size aware
+    (floor ~ pseudo / n) and negligible at ~1000 trials/side.
     """
     def dist(r):
-        p_plus = np.mean(r == 1)
+        p_plus = (np.count_nonzero(r == 1) + pseudo) / (len(r) + 2 * pseudo)
         return np.array([p_plus, 1.0 - p_plus])
 
     p, q = dist(resp_p), dist(resp_q)
-    m = p > 0
-    return float(np.sum(p[m] * np.log2(p[m] / q[m])))
+    return float(np.sum(p * np.log2(p / q)))
 
 
 def log_col(v, eps):
@@ -163,16 +203,20 @@ class PolicyKL:
     t_tail    trace window kept past the response (s) -- forwarded to measure_trial
     v_thr     movement-onset speed threshold (rad/s) -- forwarded to measure_trial
     winsor    per-coordinate winsorization percent for the Gaussian KL terms
+    pseudo    Jeffreys pseudocount for the discrete choice KL (add-pseudo smoothing)
+    unbiased  analytically remove the plug-in Gaussian-KL bias (~k^2/2n); on by default
     eps       floor applied before log() of onset / duration (s)
     """
 
-    def __init__(self, k_pc=10, n_trials=2000, t_tail=T_TAIL, v_thr=V_THR,
-                 winsor=5.0, eps=DT):
+    def __init__(self, k_pc=50, n_trials=2000, t_tail=T_TAIL, v_thr=V_THR,
+                 winsor=5.0, pseudo=0.5, unbiased=True, eps=DT):
         self.k_pc = k_pc
         self.n_trials = n_trials
         self.t_tail = t_tail
         self.v_thr = v_thr
         self.winsor = winsor
+        self.pseudo = pseudo
+        self.unbiased = unbiased
         self.eps = eps
 
     def estimate(self, animal):
@@ -191,7 +235,7 @@ class PolicyKL:
 
             # choice: discrete binary KL of the response side
             terms['choice'][s] = choice_kl(late.response_side[p_sel],
-                                           early.response_side[q_sel])
+                                           early.response_side[q_sel], self.pseudo)
 
             # per-side PCA on the folded traces (common basis for early + late)
             pca = PCA(n_components=self.k_pc).fit(np.vstack([early.trace[q_sel], late.trace[p_sel]]))
@@ -201,15 +245,15 @@ class PolicyKL:
             # onset / duration: winsorized 1-D Gaussian KL on log-time
             onset_q, onset_p = log_col(early.onset[q_sel], self.eps), log_col(late.onset[p_sel], self.eps)
             dur_q, dur_p = log_col(early.duration[q_sel], self.eps), log_col(late.duration[p_sel], self.eps)
-            terms['onset'][s] = gaussian_kl(onset_p, onset_q, self.winsor)
-            terms['duration'][s] = gaussian_kl(dur_p, dur_q, self.winsor)
+            terms['onset'][s] = gaussian_kl(onset_p, onset_q, self.winsor, self.unbiased)
+            terms['duration'][s] = gaussian_kl(dur_p, dur_q, self.winsor, self.unbiased)
 
             # trace: winsorized MVN Gaussian KL on the PC scores
-            terms['trace'][s] = gaussian_kl(trace_p, trace_q, self.winsor)
+            terms['trace'][s] = gaussian_kl(trace_p, trace_q, self.winsor, self.unbiased)
 
             # joint: winsorized MVN over [log onset, log duration, PC scores]
             joint_q = np.column_stack([onset_q, dur_q, trace_q])
             joint_p = np.column_stack([onset_p, dur_p, trace_p])
-            terms['joint'][s] = gaussian_kl(joint_p, joint_q, self.winsor)
+            terms['joint'][s] = gaussian_kl(joint_p, joint_q, self.winsor, self.unbiased)
 
         return KLResult(terms, weights)

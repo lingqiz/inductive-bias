@@ -236,6 +236,7 @@ def collect_trials(animal, n_trials=2000, from_end=False, easy_only=True,
 
     if from_end:                                          # restore chronological order
         ms = ms[::-1]; days = days[::-1]
+
     return TrialSet(
         onset=np.array([m.onset_time for m in ms]),
         duration=np.array([m.duration for m in ms]),

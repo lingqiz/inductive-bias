@@ -213,7 +213,15 @@ class PolicyKL:
                                t_tail=self.t_tail, v_thr=self.v_thr)
         late = collect_trials(animal, self.n_trials, from_end=True,
                               t_tail=self.t_tail, v_thr=self.v_thr)
+        return self.estimate_sets(early, late)
 
+    def estimate_sets(self, early, late):
+        """Compute all KL terms from pre-collected naive/trained TrialSets.
+
+        Same computation as :meth:`estimate` but on TrialSets supplied directly, so
+        it also works on a pooled "super animal" (trials combined across animals via
+        :meth:`TrialSet.concat`) -- the large sample then pins down a high-K covariance.
+        """
         sides = (+1, -1)
         weights = {s: float(np.mean(late.stim_side == s)) for s in sides}
         terms = {name: {} for name in KLResult.TERMS}

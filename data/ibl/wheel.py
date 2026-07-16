@@ -202,6 +202,24 @@ class TrialSet:
         """Proportion correct over the collected trials."""
         return float(self.correct.mean())
 
+    @classmethod
+    def concat(cls, trialsets):
+        """Pool several TrialSets into one (e.g. trials pooled across animals).
+
+        Concatenates every field; ``trace`` is row-stacked. Empty sets are skipped.
+        Use to build a combined "super animal" from per-animal collections.
+        """
+        ts = [t for t in trialsets if len(t)]
+        return cls(
+            onset=np.concatenate([t.onset for t in ts]),
+            duration=np.concatenate([t.duration for t in ts]),
+            response_side=np.concatenate([t.response_side for t in ts]),
+            stim_side=np.concatenate([t.stim_side for t in ts]),
+            correct=np.concatenate([t.correct for t in ts]),
+            trace=np.vstack([t.trace for t in ts]),
+            training_day=np.concatenate([t.training_day for t in ts]),
+        )
+
 
 def collect_trials(animal, n_trials=2000, from_end=False, easy_only=True,
                    t_tail=T_TAIL, v_thr=V_THR):

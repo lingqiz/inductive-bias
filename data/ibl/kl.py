@@ -11,24 +11,6 @@ the stimulus side. The factors are:
     trace      top-K folded-trace PC scores        (winsorized MVN Gaussian KL)
     joint      [log onset, log duration, PC scores] (winsorized MVN Gaussian KL)
 
-Conventions (uniform across every term):
-  - reported in BITS (log base 2);
-  - p = late (posterior), q = early (prior);  KL(p || q);
-  - computed per stimulus side s in {+1, -1}, then combined over the stimulus
-    either as the p(stim)-weighted mean E_stim = sum_s w[s] KL[s] ('mean') or the
-    sup over sides max_s KL[s] ('max'); w[s] is the LATE stimulus frequency;
-  - K = 10 trace PCs (the reliably-estimated dimensionality; split-half loading
-    similarity), one PCA per stimulus side (common basis for early + late);
-  - winsor = 5% (each PC / log-time coordinate clipped to its [5, 95] percentiles,
-    where the heavy-tailed PC scores become approximately Gaussian).
-
-Note: winsorize() clips each sample to ITS OWN percentiles, so the map is not
-strictly shared across the two groups -- the data-processing "lower bound"
-framing is therefore approximate. The Gaussian-KL terms are analytically
-bias-corrected by default (``unbiased=True``): the plug-in KL is biased up by
-~k^2 / (2n), governed by the ratio k/n, so the correction matters once K is a
-non-trivial fraction of the per-side sample count (see :func:`gaussian_kl`).
-
 Generated with Claude Code.
 """
 import numpy as np
@@ -61,7 +43,7 @@ def _logdet_bias(k, nu):
     return float(np.sum(digamma((nu - i + 1) / 2.0) - np.log(nu / 2.0)))
 
 
-def gaussian_kl(Zp, Zq, winsor, unbiased=True):
+def gaussian_kl(Zp, Zq, winsor, unbiased=True, diag=False):
     """KL(N(p) || N(q)) in bits, fitting an MVN (mean + covariance) to winsorized samples.
 
     p = late (posterior), q = early (prior); Zp, Zq are (n, k) score matrices. The
@@ -71,11 +53,15 @@ def gaussian_kl(Zp, Zq, winsor, unbiased=True):
     With ``unbiased=True`` (default) the plug-in bias is removed analytically under the
     Gaussian model -- the plug-in KL is biased UP by ~k^2 / (2 n) (dimension^2 over sample
     size), dominated by the inflated inverse covariance E[S_q^-1] = n_q/(n_q-k-2) * Sigma_q^-1.
-    Three corrections (see derivation notes): (1) unbiased inverse A_q = (n_q-k-2)/(n_q-1)
-    * S_q^-1; (2) subtract the sample-mean-variance inflation tr(A_q S_p)/n_p + k/n_q from the
-    Mahalanobis term; (3) debias each log-det by _logdet_bias (cancels when n_p == n_q).
-    Requires k <= n-2 per group; returns nan otherwise (covariance under-determined).
+    
+    With ``diag=True`` the coordinates are treated as independent Gaussians: the KL is the
+    sum of the per-coordinate 1-D KLs (off-diagonal covariance dropped).
     """
+    if diag and Zp.shape[1] > 1:
+        return float(sum(gaussian_kl(Zp[:, i:i + 1], Zq[:, i:i + 1], winsor, unbiased)
+                         for i in range(Zp.shape[1])))
+    
+    # compute KL under a Gaussian model
     Zp, Zq = winsorize(Zp, winsor), winsorize(Zq, winsor)
     np_p, np_q = Zp.shape[0], Zq.shape[0]
     mp, mq = Zp.mean(0), Zq.mean(0)
@@ -205,11 +191,12 @@ class PolicyKL:
     winsor    per-coordinate winsorization percent for the Gaussian KL terms
     pseudo    Jeffreys pseudocount for the discrete choice KL (add-pseudo smoothing)
     unbiased  analytically remove the plug-in Gaussian-KL bias (~k^2/2n); on by default
+    diag      treat PCs as independent (sum of 1-D KLs) -> ~k-fold smaller residual bias
     eps       floor applied before log() of onset / duration (s)
     """
 
-    def __init__(self, k_pc=50, n_trials=2000, t_tail=T_TAIL, v_thr=V_THR,
-                 winsor=5.0, pseudo=0.5, unbiased=True, eps=DT):
+    def __init__(self, k_pc=64, n_trials=2000, t_tail=T_TAIL, v_thr=V_THR,
+                 winsor=5.0, pseudo=0.5, unbiased=True, diag=True, eps=DT):
         self.k_pc = k_pc
         self.n_trials = n_trials
         self.t_tail = t_tail
@@ -217,6 +204,7 @@ class PolicyKL:
         self.winsor = winsor
         self.pseudo = pseudo
         self.unbiased = unbiased
+        self.diag = diag
         self.eps = eps
 
     def estimate(self, animal):
@@ -249,11 +237,11 @@ class PolicyKL:
             terms['duration'][s] = gaussian_kl(dur_p, dur_q, self.winsor, self.unbiased)
 
             # trace: winsorized MVN Gaussian KL on the PC scores
-            terms['trace'][s] = gaussian_kl(trace_p, trace_q, self.winsor, self.unbiased)
+            terms['trace'][s] = gaussian_kl(trace_p, trace_q, self.winsor, self.unbiased, self.diag)
 
             # joint: winsorized MVN over [log onset, log duration, PC scores]
             joint_q = np.column_stack([onset_q, dur_q, trace_q])
             joint_p = np.column_stack([onset_p, dur_p, trace_p])
-            terms['joint'][s] = gaussian_kl(joint_p, joint_q, self.winsor, self.unbiased)
+            terms['joint'][s] = gaussian_kl(joint_p, joint_q, self.winsor, self.unbiased, self.diag)
 
         return KLResult(terms, weights)

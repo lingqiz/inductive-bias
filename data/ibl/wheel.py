@@ -202,6 +202,12 @@ class TrialSet:
         """Proportion correct over the collected trials."""
         return float(self.correct.mean())
 
+    def subset(self, idx):
+        """Row-index every field (idx: integer array / boolean mask) -> a new TrialSet."""
+        return TrialSet(self.onset[idx], self.duration[idx], self.response_side[idx],
+                        self.stim_side[idx], self.correct[idx], self.trace[idx],
+                        self.training_day[idx])
+
     @classmethod
     def concat(cls, trialsets):
         """Pool several TrialSets into one (e.g. trials pooled across animals).

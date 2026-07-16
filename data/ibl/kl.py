@@ -17,7 +17,7 @@ import numpy as np
 from scipy.special import digamma
 from sklearn.decomposition import PCA
 
-from .wheel import collect_trials, DT, T_TAIL, V_THR
+from .wheel import collect_trials, TrialSet, DT, T_TAIL, V_THR
 
 
 # ---------------------------------------------------------------------------
@@ -252,4 +252,31 @@ class PolicyKL:
             joint_p = np.column_stack([onset_p, dur_p, trace_p])
             terms['joint'][s] = gaussian_kl(joint_p, joint_q, self.winsor, self.unbiased, self.diag)
 
+        return KLResult(terms, weights)
+
+    def estimate_null(self, early, late, n_rep=10, seed=0):
+        """Noise KL floor: pool early+late, reshuffle into same-size groups, average the KL.
+
+        Under the null (early and late are the same distribution) the true KL is 0, so the
+        returned per-term values are the finite-sample estimation floor at this K / n --
+        reshuffling preserves the exact group sizes and per-stim structure of
+        :meth:`estimate_sets`. Compare term-by-term (or subtract) to gauge how much of the
+        real KL is signal above chance. Returns a KLResult of the mean floor over ``n_rep``.
+        """
+        pool = TrialSet.concat([early, late])
+        n, ne = len(pool), len(early)
+        rng = np.random.default_rng(seed)
+        acc = {name: {+1: [], -1: []} for name in KLResult.TERMS}
+        w = {+1: [], -1: []}
+        for _ in range(n_rep):
+            idx = rng.permutation(n)
+            r = self.estimate_sets(pool.subset(idx[:ne]), pool.subset(idx[ne:]))
+            for name in KLResult.TERMS:
+                for s in (+1, -1):
+                    acc[name][s].append(r.terms[name][s])
+            for s in (+1, -1):
+                w[s].append(r.weights[s])
+        terms = {name: {s: float(np.mean(acc[name][s])) for s in (+1, -1)}
+                 for name in KLResult.TERMS}
+        weights = {s: float(np.mean(w[s])) for s in (+1, -1)}
         return KLResult(terms, weights)

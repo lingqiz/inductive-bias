@@ -7,7 +7,7 @@ cache/
 *.mat
 dataset.md
 .DS_Store
-/poster
+/archive/poster
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

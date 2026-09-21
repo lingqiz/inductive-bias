@@ -5,9 +5,9 @@ cache/
 *.csv
 *.ipynb
 *.mat
-dataset.md
 .DS_Store
 /archive/poster
+/notes
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

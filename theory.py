@@ -74,9 +74,11 @@ class ConvergenceCurve():
             log_m = log_m[:-1]  # exclude last point
             log_gap = np.log2(error_gap[:-1])
         else:
-            error_gap = self.error - self.asmp_error            
+            error_gap = self.error - self.asmp_error
             log_gap = np.log2(error_gap)
 
+        # no error bars: this is the expected error, which can be estimated
+        # to arbitrary precision with more simulation repeats
         l = ax.plot(log_m, log_gap, marker='o', markersize=6)
         ax.set_xlabel('$\log_2(m)$')
         ax.set_ylabel(r'$\log |\epsilon - \epsilon^*|$')

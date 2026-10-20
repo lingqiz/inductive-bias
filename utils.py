@@ -45,13 +45,21 @@ class PACBayesCurve:
     min(g(m), cap), applied both when fitting and when predicting.
 
     The fit minimizes the linear least-squares residual on the raw error rate,
-    Sum (g(m_i) - y_i)**2, where m is cumulative trials and y is the error rate.
-    ``params`` also reports ``rss`` and ``r2`` (fraction of variance explained).
+    Sum (g(m_i) - y_i)**2, where m is cumulative trials and y is the error rate
+    (``loss='linear'``, default). With ``loss='log'`` it minimizes the residual on the
+    LOG error, Sum (log g(m_i) - log y_i)**2, i.e. relative residuals: for curves
+    spanning decades this weights all m evenly, where the linear fit is dominated by
+    the largest (small-m) errors and ignores the tail that sets the floor.
+    ``params`` also reports ``rss`` and ``r2`` (fraction of variance explained), and
+    for ``loss='log'`` the minimized ``log_rss``.
     """
 
-    def __init__(self, cap=None, floor=0.0):
+    def __init__(self, cap=None, floor=0.0, loss='linear'):
+        if loss not in ('linear', 'log'):
+            raise ValueError(f"loss must be 'linear' or 'log', got {loss!r}")
         self.cap = cap
         self.floor = float(floor)
+        self.loss = loss
         self.params = None
         self.fitted = False
 
@@ -71,11 +79,17 @@ class PACBayesCurve:
             a0, d0 = _loglog_seed(m, np.clip(y - self.floor, 1e-6, None))
             p0 = [max(d0 / 2.0, 1e-6), a0]
 
-        popt, _ = curve_fit(self._curve, m, y, p0=p0,
+        if self.loss == 'log':
+            curve, target = (lambda m, phi, alpha: np.log(self._curve(m, phi, alpha))), np.log(y)
+        else:
+            curve, target = self._curve, y
+        popt, _ = curve_fit(curve, m, target, p0=p0,
                             bounds=([0.0, 0.0], [np.inf, np.inf]), maxfev=20000)
         phi, alpha = popt
         self.params = {'phi': float(phi), 'alpha': float(alpha), 'floor': self.floor,
                        'cap': self.cap, **_gof(self._curve(m, *popt), y)}
+        if self.loss == 'log':
+            self.params['log_rss'] = float(np.sum((curve(m, *popt) - target) ** 2))
         self.fitted = True
         return self
 

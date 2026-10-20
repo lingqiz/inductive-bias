@@ -108,7 +108,7 @@ class ConvergenceCurve():
 
 # -----------------------------------------------------------------------------
 # Neural-network data scaling + pretraining simulation (MNIST, CNN);
-# used by neural_network.ipynb, results in data/simulation/
+# used by pretraining.ipynb, results in data/simulation/
 # -----------------------------------------------------------------------------
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

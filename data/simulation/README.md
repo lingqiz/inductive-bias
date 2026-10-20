@@ -8,7 +8,7 @@ from a CNN pretrained on other digits.
 
 ### How it was generated
 
-`neural_network.ipynb`, **Part 1: Simulation** (all simulation code is in `theory.py`:
+`pretraining.ipynb`, **Part 1: Simulation** (all simulation code is in `theory.py`:
 `load_mnist`, `split_digits`, `hold_out_per_class`, `merge_sources`, `augment`, `CNN`, `train`,
 `evaluate`, `pretrain`, `pretrained_init`, `NetworkCurve`). To regenerate, delete the `.npz`
 files here (and the pretrained networks in `cache/nn_pretrain_358_mix300/`) and run the setup

@@ -289,6 +289,206 @@ def curve_smoothness(curves, err_min=1e-3):
     return np.array(scores)
 
 
+# ---------------------------------------------------------------------------------------
+# Repeated simulated learning curves: shared-floor two-part fits, bootstrap, figures
+# ---------------------------------------------------------------------------------------
+
+# RepeatedCurve metrics: attribute -> (name, axis label)
+CURVE_METRICS = {'error': ('error', r'test error $\epsilon$'),
+                 'loss': ('cross-entropy', 'test cross-entropy')}
+
+
+class RepeatedCurve:
+    """Learning curve from repeated simulations.
+
+    ``res`` holds ``train_size`` (n_m,) and per (m, repeat) arrays ``errors`` (test 0-1
+    error), ``losses`` (test cross-entropy) and ``train_errors``, each (n_m, n_repeat).
+    Adds the mean / sd over repeats: ``error``, ``error_sd``, ``loss``, ``loss_sd``.
+    """
+
+    def __init__(self, res):
+        self.train_size = np.asarray(res['train_size'])
+        self.errors, self.losses = res['errors'], res['losses']
+        self.train_errors = res['train_errors']
+        self.error, self.error_sd = self.errors.mean(axis=1), self.errors.std(axis=1)
+        self.loss, self.loss_sd = self.losses.mean(axis=1), self.losses.std(axis=1)
+
+
+def _in_range(cc, m_range):
+    return (cc.train_size >= m_range[0]) & (cc.train_size <= m_range[1])
+
+
+def fit_shared_floor(curves, m_range, metric='error'):
+    """:class:`PACBayesCurve` fits (log-error least squares) of ``cc.<metric>`` with one floor
+    shared by all curves (dict of curves), on m_range[0] <= m <= m_range[1]: the floor
+    minimizes the summed log_rss over curves. Returns (floor, {name: fit}).
+    """
+    def fit_all(floor):
+        out = {}
+        for k, cc in curves.items():
+            sel = _in_range(cc, m_range)
+            out[k] = PACBayesCurve(floor=floor, loss='log').fit(cc.train_size[sel], getattr(cc, metric)[sel])
+        return out
+
+    upper = min(getattr(cc, metric)[_in_range(cc, m_range)].min() for cc in curves.values())
+    res = minimize_scalar(lambda f: sum(fit.params['log_rss'] for fit in fit_all(f).values()),
+                          bounds=(0.0, upper), method='bounded')
+    return res.x, fit_all(res.x)
+
+
+def bootstrap_shared_floor(curves, m_range, metric='error', n_boot=1000, seed=0):
+    """Bootstrap over simulation repeats: resample the repeat indices with replacement (the
+    same indices for all curves, which share the training subset of each repeat), average,
+    and redo the shared-floor fit. Returns {name: (n_boot, 2) array of (alpha, phi)}.
+    """
+    per_repeat = {'error': 'errors', 'loss': 'losses'}[metric]
+    rng = np.random.default_rng(seed)
+    n_rep = getattr(next(iter(curves.values())), per_repeat).shape[1]
+
+    out = {k: [] for k in curves}
+    for _ in range(n_boot):
+        idx = rng.integers(0, n_rep, n_rep)
+        boot = {k: types.SimpleNamespace(train_size=cc.train_size,
+                                         **{metric: getattr(cc, per_repeat)[:, idx].mean(axis=1)})
+                for k, cc in curves.items()}
+        _, fits = fit_shared_floor(boot, m_range, metric=metric)
+        for k, f in fits.items():
+            out[k].append((f.params['alpha'], f.params['phi']))
+    return {k: np.array(v) for k, v in out.items()}
+
+
+def fit_curves(curves, m_range, metrics=tuple(CURVE_METRICS), n_boot=1000, seed=0):
+    """Shared-floor fits + bootstrap of a dict of :class:`RepeatedCurve`, per metric:
+    {metric: {'floor': float, 'fits': {name: PACBayesCurve}, 'boot': {name: (n_boot, 2)}}}.
+    """
+    results = {}
+    for metric in metrics:
+        floor, fits = fit_shared_floor(curves, m_range, metric=metric)
+        boot = bootstrap_shared_floor(curves, m_range, metric=metric, n_boot=n_boot, seed=seed)
+        results[metric] = {'floor': floor, 'fits': fits, 'boot': boot}
+    return results
+
+
+def print_fits(results):
+    """Table of the :func:`fit_curves` results: alpha, phi (+- bootstrap sd) and R^2."""
+    for metric, res in results.items():
+        print(f"--- {CURVE_METRICS[metric][0]}: shared floor = {res['floor']:.4f}")
+        for k, f in res['fits'].items():
+            p, b = f.params, res['boot'][k]
+            print(f"{k:28s} alpha {p['alpha']:.3f} +- {b[:, 0].std():.3f}   "
+                  f"phi {p['phi']:.3f} +- {b[:, 1].std():.3f}   r2 {p['r2']:.4f}")
+
+
+def invert_curve(fit, error, m_range=(2 ** -4, 2 ** 24)):
+    """Invert a fitted (decreasing) learning curve numerically: m with fit.predict(m) = error
+    (or loss); nan where it is at or below the curve's floor.
+    """
+    grid = np.logspace(np.log2(m_range[0]), np.log2(m_range[1]), 4000, base=2)
+    log_g = np.log(fit.predict(grid))
+    m = np.exp(np.interp(-np.log(error), -log_g, np.log(grid)))
+    return np.where(np.asarray(error) > fit.params['floor'], m, np.nan)
+
+
+def loglog(ax):
+    """log2-log2 axes without minor ticks."""
+    ax.set_xscale('log', base=2)
+    ax.set_yscale('log', base=2)
+    ax.minorticks_off()
+
+
+def _m_grid(m_range):
+    return np.logspace(np.log2(m_range[0]), np.log2(m_range[1]), 100, base=2)
+
+
+def plot_curve_fits(curves, results, m_range, colors, path=None):
+    """One row per metric of :func:`fit_curves`: data (+- sd over repeats) with the two-part fit;
+    metric above the shared floor (expected curve: no error bars); effective data m_eff / m
+    relative to the fitted curve of the first entry of ``curves`` (the reference).
+    """
+    ref = next(iter(curves))
+    m_grid = _m_grid(m_range)
+    fig, axs = plt.subplots(len(results), 3, figsize=(15, 5 * len(results)), squeeze=False)
+    for row, (metric, res) in zip(axs, results.items()):
+        name, label = CURVE_METRICS[metric]
+        floor, fits = res['floor'], res['fits']
+        for k, cc in curves.items():
+            sel, color = _in_range(cc, m_range), colors[k]
+            m, y = cc.train_size[sel], getattr(cc, metric)[sel]
+
+            # data + two-part fit
+            row[0].errorbar(m, y, yerr=getattr(cc, metric + '_sd')[sel], color=color,
+                            marker='o', markersize=6, capsize=4, label=k)
+            row[0].plot(m_grid, fits[k].predict(m_grid), '--', color=color)
+
+            # excess above the shared floor
+            gap = y - floor
+            ok = gap > 0
+            row[1].plot(m[ok], gap[ok], marker='o', markersize=6, color=color, label=k)
+            row[1].plot(m_grid, fits[k].predict(m_grid) - floor, '--', color=color)
+
+            # effective data multiplier relative to the reference curve
+            if k != ref:
+                row[2].plot(m, invert_curve(fits[ref], y) / m,
+                            marker='o', markersize=6, color=color, label=k)
+
+        row[2].axhline(y=1, color='k', linestyle='--')
+        row[0].set_ylabel(label)
+        row[1].set_ylabel(f'{name} above floor')
+        row[2].set_ylabel(r'$m_{eff} / m$' + f' ({name})')
+        for ax in row:
+            loglog(ax)
+            ax.set_xlabel('target training set size (m)')
+            ax.legend()
+
+    plt.tight_layout()
+    if path is not None:
+        plt.savefig(path, bbox_inches='tight')
+    plt.show()
+
+
+def plot_phi_alpha(curves, result, metric, ylabel, m_range, colors, alpha_lim, phi_lim, path=None):
+    """Paper figure for one metric (``result`` = :func:`fit_curves` entry): metric above the
+    shared floor with the two-part fit (left), fitted phi (middle) and alpha (right) per curve,
+    +- bootstrap sd.
+    """
+    fits, floor, boot = result['fits'], result['floor'], result['boot']
+    m_grid = _m_grid(m_range)
+    fig, axs = plt.subplots(1, 3, figsize=(10.5, 4.5), gridspec_kw={'width_ratios': [3, 1.6, 1.6]})
+
+    # data (expected curve: no error bars) + two-part fit
+    for k, cc in curves.items():
+        sel, color = _in_range(cc, m_range), colors[k]
+        m, gap = cc.train_size[sel], getattr(cc, metric)[sel] - floor
+        axs[0].plot(m, gap, marker='o', markersize=6, linestyle='none', color=color, label=k)
+        axs[0].plot(m_grid, fits[k].predict(m_grid) - floor, '--', color=color)
+    loglog(axs[0])
+    axs[0].set_xlabel('target training set size (m)')
+    axs[0].set_ylabel(ylabel)
+    axs[0].legend()
+
+    # phi (middle) and alpha (right) across curves, +- bootstrap sd
+    names = [k.replace('pretrain ', '').replace(' ', '\n') for k in curves]
+    x = np.arange(len(names))
+    for ax, param, label, lim in ((axs[1], 'phi', r'$\phi$', phi_lim),
+                                  (axs[2], 'alpha', r'$\alpha$', alpha_lim)):
+        j = ('alpha', 'phi').index(param)
+        est = [fits[k].params[param] for k in curves]
+        sd = [boot[k][:, j].std() for k in curves]
+        ax.plot(x, est, color='black', zorder=1)
+        for xi, e, s, k in zip(x, est, sd, curves):
+            ax.errorbar(xi, e, yerr=s, color=colors[k], marker='o', markersize=8,
+                        capsize=4, zorder=2)
+        ax.set_ylim(*lim)
+        ax.set_ylabel(label)
+        ax.set_xticks(x, names)
+        ax.set_xlim(-0.6, len(names) - 0.4)
+
+    plt.tight_layout()
+    if path is not None:
+        plt.savefig(path, bbox_inches='tight')
+    plt.show()
+
+
 class PiecewiseLinear:
     """.. deprecated::
         Use :class:`PACBayesCurve` or :class:`PowerLaw` for learning-curve

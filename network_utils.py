@@ -365,7 +365,7 @@ def noisy_error(net, X, y, sigma, n_draw=10, seed=0):
     return np.mean(errs)
 
 
-def flatness_sigma(net, X, y, eps=0.1, n_draw=10, lo=1e-4, hi=1.0, n_iter=15):
+def flatness_sigma(net, X, y, eps=0.2, n_draw=10, lo=1e-4, hi=1.0, n_iter=15):
     '''
     Largest isotropic weight noise sigma that keeps the (noisy) training error within eps of
     the trained net's, by bisection on log sigma in [lo, hi].

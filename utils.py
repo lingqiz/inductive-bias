@@ -272,26 +272,21 @@ class SigmoidCurve(_LearningCurve):
         return [m0, max(m0 / 4, 1.0)]
 
 
-def curve_jaggedness(curves, err_min=1e-3):
-    """How much each learning curve zig-zags, measured on log10 error.
+def curve_smoothness(curves, err_min=1e-3):
+    """How smooth each learning curve is, measured on log10 error (higher = smoother).
 
     ``curves`` is a list of (m, err) arrays binned evenly in log m, so a power law is a
     straight line. Zero-error bins are clipped to ``err_min`` before taking the log. The
-    score is the RMS second difference across consecutive bins,
+    score is minus the RMS second difference across consecutive bins,
     log_err[k+1] - 2 log_err[k] + log_err[k-1], i.e. how far each bin sits from the line
-    through its two neighbours: near 0 for a smooth curve (even a curved one), large for
-    one that bounces up and down. It uses no model fit.
+    through its two neighbours: near 0 for a smooth curve (even a curved one), strongly
+    negative for one that zig-zags. It uses no model fit.
     """
     scores = []
     for _, err in curves:
         zigzag = np.diff(np.log10(np.clip(err, err_min, None)), 2)
-        scores.append(np.sqrt(np.mean(zigzag ** 2)) if len(zigzag) else 0.0)
+        scores.append(-np.sqrt(np.mean(zigzag ** 2)) if len(zigzag) else 0.0)
     return np.array(scores)
-
-
-def rank_by_smoothness(curves, err_min=1e-3):
-    """Indices of ``curves`` from smoothest to most jagged (see :func:`curve_jaggedness`)."""
-    return np.argsort(curve_jaggedness(curves, err_min), kind='stable')
 
 
 class PiecewiseLinear:

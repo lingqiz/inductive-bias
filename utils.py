@@ -1,8 +1,9 @@
+import types
 import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator, ScalarFormatter
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, minimize_scalar
 
 
 def _loglog_seed(m, y):
@@ -271,37 +272,26 @@ class SigmoidCurve(_LearningCurve):
         return [m0, max(m0 / 4, 1.0)]
 
 
-def curve_noise_scores(curves, predictions, err_min=1e-3):
-    """Two noise scores per learning curve, both measured on log10 error.
+def curve_jaggedness(curves, err_min=1e-3):
+    """How much each learning curve zig-zags, measured on log10 error.
 
-    ``curves`` is a list of (m, err) arrays binned evenly in log m, and ``predictions``
-    the fitted model's error at each curve's m. Zero-error bins are clipped to
-    ``err_min`` before taking the log.
-
-    Returns (jaggedness, misfit) arrays:
-      jaggedness -- RMS second difference across consecutive bins: how much the curve
-                    zig-zags, independent of any model.
-      misfit     -- RMS residual from the prediction: how far the curve is from its fit.
+    ``curves`` is a list of (m, err) arrays binned evenly in log m, so a power law is a
+    straight line. Zero-error bins are clipped to ``err_min`` before taking the log. The
+    score is the RMS second difference across consecutive bins,
+    log_err[k+1] - 2 log_err[k] + log_err[k-1], i.e. how far each bin sits from the line
+    through its two neighbours: near 0 for a smooth curve (even a curved one), large for
+    one that bounces up and down. It uses no model fit.
     """
-    jaggedness, misfit = [], []
-    for (_, err), pred in zip(curves, predictions):
-        log_err = np.log10(np.clip(err, err_min, None))
-        zigzag = np.diff(log_err, 2)
-        jaggedness.append(np.sqrt(np.mean(zigzag ** 2)) if len(zigzag) else 0.0)
-        misfit.append(np.sqrt(np.mean((log_err - np.log10(pred)) ** 2)))
-    return np.array(jaggedness), np.array(misfit)
+    scores = []
+    for _, err in curves:
+        zigzag = np.diff(np.log10(np.clip(err, err_min, None)), 2)
+        scores.append(np.sqrt(np.mean(zigzag ** 2)) if len(zigzag) else 0.0)
+    return np.array(scores)
 
 
-def select_smooth_curves(curves, predictions, jag_pct, misfit_pct, err_min=1e-3):
-    """Boolean mask that drops the noisiest learning curves.
-
-    Drops the top ``jag_pct`` % most jagged curves and the top ``misfit_pct`` % worst
-    fitting ones (scores from :func:`curve_noise_scores`); a curve is kept only if it
-    passes both cuts.
-    """
-    jaggedness, misfit = curve_noise_scores(curves, predictions, err_min)
-    return ((jaggedness <= np.percentile(jaggedness, 100 - jag_pct)) &
-            (misfit <= np.percentile(misfit, 100 - misfit_pct)))
+def rank_by_smoothness(curves, err_min=1e-3):
+    """Indices of ``curves`` from smoothest to most jagged (see :func:`curve_jaggedness`)."""
+    return np.argsort(curve_jaggedness(curves, err_min), kind='stable')
 
 
 class PiecewiseLinear:

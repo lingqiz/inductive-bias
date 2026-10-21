@@ -279,7 +279,7 @@ def curve_smoothness(curves, err_min=1e-3):
     straight line. Zero-error bins are clipped to ``err_min`` before taking the log. The
     score is minus the RMS second difference across consecutive bins,
     log_err[k+1] - 2 log_err[k] + log_err[k-1], i.e. how far each bin sits from the line
-    through its two neighbours: near 0 for a smooth curve (even a curved one), strongly
+    through its two neighbors: near 0 for a smooth curve (even a curved one), strongly
     negative for one that zig-zags. It uses no model fit.
     """
     scores = []

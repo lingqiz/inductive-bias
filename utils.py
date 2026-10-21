@@ -446,31 +446,50 @@ def plot_curve_fits(curves, results, m_range, colors, path=None):
     plt.show()
 
 
-def plot_phi_alpha(curves, result, metric, ylabel, m_range, colors, alpha_lim, phi_lim, path=None):
+def plot_phi_alpha(curves, result, metric, ylabel, m_range, colors, alpha_lim, phi_lim, path=None,
+                   raw=False):
     """Paper figure for one metric (``result`` = :func:`fit_curves` entry): metric above the
     shared floor with the two-part fit (left), fitted phi (middle) and alpha (right) per curve,
-    +- bootstrap sd.
+    +- bootstrap sd. ``raw=True`` adds a leftmost panel with the metric itself (+- sd over
+    repeats) and the fit, before the floor is taken out.
     """
     fits, floor, boot = result['fits'], result['floor'], result['boot']
     m_grid = _m_grid(m_range)
-    fig, axs = plt.subplots(1, 3, figsize=(10.5, 4.5), gridspec_kw={'width_ratios': [3, 1.6, 1.6]})
+    widths = [3, 3, 1.6, 1.6] if raw else [3, 1.6, 1.6]
+    fig, axs = plt.subplots(1, len(widths), figsize=(10.5 * sum(widths) / 6.2, 4.5),
+                            gridspec_kw={'width_ratios': widths})
+
+    # metric itself (+- sd over repeats) + two-part fit
+    if raw:
+        for k, cc in curves.items():
+            sel, color = _in_range(cc, m_range), colors[k]
+            axs[0].errorbar(cc.train_size[sel], getattr(cc, metric)[sel],
+                            yerr=getattr(cc, metric + '_sd')[sel], color=color,
+                            marker='o', markersize=6, capsize=4, linestyle='none', label=k)
+            axs[0].plot(m_grid, fits[k].predict(m_grid), '--', color=color)
+        loglog(axs[0])
+        axs[0].set_xlabel('target training set size (m)')
+        axs[0].set_ylabel(CURVE_METRICS[metric][1])
+        axs[0].legend()
+    ax_gap = axs[1] if raw else axs[0]
 
     # data (expected curve: no error bars) + two-part fit
     for k, cc in curves.items():
         sel, color = _in_range(cc, m_range), colors[k]
         m, gap = cc.train_size[sel], getattr(cc, metric)[sel] - floor
-        axs[0].plot(m, gap, marker='o', markersize=6, linestyle='none', color=color, label=k)
-        axs[0].plot(m_grid, fits[k].predict(m_grid) - floor, '--', color=color)
-    loglog(axs[0])
-    axs[0].set_xlabel('target training set size (m)')
-    axs[0].set_ylabel(ylabel)
-    axs[0].legend()
+        ax_gap.plot(m, gap, marker='o', markersize=6, linestyle='none', color=color, label=k)
+        ax_gap.plot(m_grid, fits[k].predict(m_grid) - floor, '--', color=color)
+    loglog(ax_gap)
+    ax_gap.set_xlabel('target training set size (m)')
+    ax_gap.set_ylabel(ylabel)
+    if not raw:
+        ax_gap.legend()
 
-    # phi (middle) and alpha (right) across curves, +- bootstrap sd
+    # phi and alpha across curves, +- bootstrap sd
     names = [k.replace('pretrain ', '').replace(' ', '\n') for k in curves]
     x = np.arange(len(names))
-    for ax, param, label, lim in ((axs[1], 'phi', r'$\phi$', phi_lim),
-                                  (axs[2], 'alpha', r'$\alpha$', alpha_lim)):
+    for ax, param, label, lim in ((axs[-2], 'phi', r'$\phi$', phi_lim),
+                                  (axs[-1], 'alpha', r'$\alpha$', alpha_lim)):
         j = ('alpha', 'phi').index(param)
         est = [fits[k].params[param] for k in curves]
         sd = [boot[k][:, j].std() for k in curves]

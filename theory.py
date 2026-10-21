@@ -1,4 +1,5 @@
 import os
+import copy
 import numpy as np
 from matplotlib.ticker import MaxNLocator, ScalarFormatter
 from utils import PiecewiseLinear
@@ -312,27 +313,115 @@ class NetworkCurve(ConvergenceCurve):
         self.loss_sd = self.losses.std(axis=1)
         return self.train_size, self.error, self.error_sd
 
-    def _simulate(self):
-        n_pool = len(self.X_pool)
+    def run_networks(self, path):
+        '''
+        Re-run the simulation and keep the networks: saves to path (.pt) the initial weights of
+        each repeat ('init', r), the trained weights ('trained', [m][r]) and their test errors /
+        test losses / train errors; loads them if path exists. (The run() cache is not touched.)
+        '''
+        arrays = ('train_size', 'errors', 'losses', 'train_errors')
+        if os.path.exists(path):
+            res = torch.load(path)  # arrays are stored as tensors (safe weights_only load)
+            res.update({k: res[k].numpy() for k in arrays})
+            assert np.array_equal(res['train_size'], self.train_size)
+            print(f'loaded {path}')
+        else:
+            self._simulate(keep=True)
+            res = {'train_size': self.train_size, 'init': self.init_states,
+                   'trained': self.trained_states, 'errors': self.errors,
+                   'losses': self.losses, 'train_errors': self.train_errors}
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            torch.save({**res, **{k: torch.as_tensor(res[k]) for k in arrays}}, path)
+        return res
+
+    def subset(self, m, r):
+        # random training subset of size m for repeat r
+        # (same subset for every condition at a given (m, r))
+        torch.manual_seed(r)
+        idx = torch.randperm(len(self.X_pool), device=device)[:m]
+        return self.X_pool[idx], self.y_pool[idx]
+
+    def _simulate(self, keep=False):
         shape = (len(self.train_size), self.n_repeat)
         self.errors, self.losses, self.train_errors = np.zeros(shape), np.zeros(shape), np.zeros(shape)
+        if keep:
+            self.init_states = [None] * self.n_repeat
+            self.trained_states = [[None] * self.n_repeat for _ in self.train_size]
         for i, m in enumerate(self.train_size):
             for r in range(self.n_repeat):
-                torch.manual_seed(r)
-
-                # sample a random training subset of size m
-                # (same subset for every condition at a given (m, r))
-                idx = torch.randperm(n_pool, device=device)[:m]
-                X_S, y_S = self.X_pool[idx], self.y_pool[idx]
+                X_S, y_S = self.subset(m, r)
 
                 # fit a network from (random or pretrained) init
                 net = self.model().to(device)
                 if self.init is not None:
                     net = self.init(net, r)
+                if keep:
+                    # the init of repeat r does not depend on m (subset is drawn on the CUDA generator)
+                    w0 = {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
+                    if i == 0:
+                        self.init_states[r] = w0
+                    assert all(torch.equal(w0[k], self.init_states[r][k]) for k in w0)
                 train(net, X_S, y_S, **self.train_kw)
+                if keep:
+                    self.trained_states[i][r] = {k: v.detach().cpu().clone()
+                                                 for k, v in net.state_dict().items()}
 
                 # evaluate on the test set; train error to check convergence
                 self.errors[i, r], self.losses[i, r] = evaluate(net, self.X_D, self.y_D)
                 self.train_errors[i, r] = evaluate(net, X_S, y_S)[0]
             print(f'm = {m:6d}  error = {self.errors[i].mean():.4f}  '
                   f'max train error = {self.train_errors[i].max():.4f}')
+
+
+# -----------------------------------------------------------------------------
+# Network-side estimates of the complexity phi: distance from the init (the
+# prior mean) and a flatness-calibrated PAC-Bayes KL (Jiang et al. 2019)
+# -----------------------------------------------------------------------------
+
+def param_distance(state, w0):
+    '''
+    Squared L2 distance between two state dicts: (total, {parameter name: distance}).
+    '''
+    layer = {k: (state[k].float() - w0[k].float()).pow(2).sum().item() for k in state}
+    return sum(layer.values()), layer
+
+
+@torch.no_grad()
+def noisy_error(net, X, y, sigma, n_draw=10, seed=0):
+    '''
+    Mean 0-1 error on (X, y) of the net with isotropic Gaussian weight noise N(0, sigma^2 I),
+    over n_draw noise draws (fixed seed: common random numbers across sigma).
+    '''
+    noisy = copy.deepcopy(net)
+    gen = torch.Generator(device=device).manual_seed(seed)
+    errs = []
+    for _ in range(n_draw):
+        for p, p0 in zip(noisy.parameters(), net.parameters()):
+            p.copy_(p0 + sigma * torch.randn(p0.shape, generator=gen, device=device))
+        errs.append(evaluate(noisy, X, y)[0])
+    return np.mean(errs)
+
+
+def flatness_sigma(net, X, y, eps=0.1, n_draw=10, lo=1e-4, hi=1.0, n_iter=15):
+    '''
+    Largest isotropic weight noise sigma that keeps the (noisy) training error within eps of
+    the trained net's, by bisection on log sigma in [lo, hi].
+    '''
+    target = evaluate(net, X, y)[0] + eps
+    log_lo, log_hi = np.log(lo), np.log(hi)
+    for _ in range(n_iter):
+        mid = (log_lo + log_hi) / 2
+        if noisy_error(net, X, y, np.exp(mid), n_draw) <= target:
+            log_lo = mid
+        else:
+            log_hi = mid
+    return np.exp(log_lo)
+
+
+def pac_bayes_kl(dist2, sigma, k):
+    '''
+    KL(N(w, sigma^2 I) || N(w0, sigma_P^2 I)) in nats, for ||w - w0||^2 = dist2 over k
+    parameters, at the best prior width sigma_P^2 = sigma^2 + dist2 / k:
+    (k/2) log(1 + dist2 / (k sigma^2))  (~ dist2 / (2 sigma^2) for small dist2).
+    '''
+    return 0.5 * k * np.log1p(dist2 / (k * sigma ** 2))

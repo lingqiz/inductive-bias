@@ -58,6 +58,25 @@ Each `.npz` (`np.load(path)`) holds:
 | `losses` | (11, 8) | test cross-entropy (nats), per (m, repeat) |
 | `train_errors` | (11, 8) | training 0-1 error on the m training images, per (m, repeat) |
 
+### Trained networks (`networks_<condition>.pt`)
+
+For the four analysed conditions (scratch, 2, 4 and all digits), Part 3 of the notebook re-runs
+the same simulation (same seeds) and keeps the networks (`NetworkCurve.run_networks`). Each file
+(`torch.load(path)`) is a dict:
+
+| key | content |
+|---|---|
+| `train_size` | (11,) target training set sizes |
+| `init` | list of 8 `state_dict`s: starting weights w0 of repeat r (random init, or pretrained `features` + random head); the same for every m |
+| `trained` | 11 × 8 nested list of `state_dict`s: trained weights at (m, repeat) |
+| `errors`, `losses`, `train_errors` | (11, 8) test error, test cross-entropy and train error of these networks |
+
+The `state_dict`s load into `CNN(n_classes=3)` (`theory.py`). The training images of (m, r) are
+`NetworkCurve.subset(m, r)` on the target pool. Because of cuDNN autotuning (see below), these
+networks are a statistical, not bit-for-bit, re-run of the `target_*.npz` curves. Measures derived
+from them (distance from the init, flatness-calibrated PAC-Bayes KL) are computed in the notebook,
+not saved.
+
 ### Environment
 
 PyTorch 2.14.1 (CUDA 13.0), torchvision 0.29.1, NumPy 1.26.4, on an NVIDIA RTX 4090

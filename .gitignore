@@ -9,6 +9,7 @@ cache/
 /archive/poster
 /notes
 /data/vision/
+/data/simulation/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

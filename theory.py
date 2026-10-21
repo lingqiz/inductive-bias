@@ -196,12 +196,14 @@ class CNN(nn.Module):
 
 
 def train(model, X, y, min_steps=3000, min_epochs=20, batch_size=128,
-          lr=1e-3, weight_decay=0.0, augment=None):
+          lr=1e-3, weight_decay=0.0, augment=None, callback=None):
     '''
     Train to (approximate) convergence with AdamW + cosine decay for
     n_steps = max(min_steps, min_epochs passes over the data):
     small m -> many epochs (train loss ~0), large m -> at least min_epochs.
     augment: optional callable applied to each minibatch of images.
+    callback: optional callable callback(step, model) after every step (e.g. to snapshot
+              the model); it does not change the training.
     '''
     m = len(X)
     bs = min(batch_size, m)
@@ -211,7 +213,7 @@ def train(model, X, y, min_steps=3000, min_epochs=20, batch_size=128,
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, n_steps)
 
     model.train()
-    for _ in range(n_steps):
+    for t in range(n_steps):
         idx = torch.randint(0, m, (bs,), device=X.device)
         xb = X[idx] if augment is None else augment(X[idx])
         loss = F.cross_entropy(model(xb), y[idx])
@@ -219,6 +221,9 @@ def train(model, X, y, min_steps=3000, min_epochs=20, batch_size=128,
         loss.backward()
         opt.step()
         sched.step()
+        if callback is not None:
+            callback(t + 1, model)
+            model.train()
     return model
 
 
@@ -317,9 +322,12 @@ class NetworkCurve(ConvergenceCurve):
         '''
         Re-run the simulation and keep the networks: saves to path (.pt) the initial weights of
         each repeat ('init', r), the trained weights ('trained', [m][r]) and their test errors /
-        test losses / train errors; loads them if path exists. (The run() cache is not touched.)
+        test losses / train errors, and the snapshot of each network at the first check
+        (every 5 steps) with zero training error ('fitted', [m][r]; 'fit_step', 'fit_errors',
+        'fit_losses', 'fit_train_errors'); loads them if path exists. (The run() cache is not touched.)
         '''
-        arrays = ('train_size', 'errors', 'losses', 'train_errors')
+        arrays = ('train_size', 'errors', 'losses', 'train_errors',
+                  'fit_step', 'fit_errors', 'fit_losses', 'fit_train_errors')
         if os.path.exists(path):
             res = torch.load(path)  # arrays are stored as tensors (safe weights_only load)
             res.update({k: res[k].numpy() for k in arrays})
@@ -329,7 +337,10 @@ class NetworkCurve(ConvergenceCurve):
             self._simulate(keep=True)
             res = {'train_size': self.train_size, 'init': self.init_states,
                    'trained': self.trained_states, 'errors': self.errors,
-                   'losses': self.losses, 'train_errors': self.train_errors}
+                   'losses': self.losses, 'train_errors': self.train_errors,
+                   'fitted': self.fit_states, 'fit_step': self.fit_step,
+                   'fit_errors': self.fit_errors, 'fit_losses': self.fit_losses,
+                   'fit_train_errors': self.fit_train_errors}
             os.makedirs(os.path.dirname(path), exist_ok=True)
             torch.save({**res, **{k: torch.as_tensor(res[k]) for k in arrays}}, path)
         return res
@@ -341,12 +352,16 @@ class NetworkCurve(ConvergenceCurve):
         idx = torch.randperm(len(self.X_pool), device=device)[:m]
         return self.X_pool[idx], self.y_pool[idx]
 
-    def _simulate(self, keep=False):
+    def _simulate(self, keep=False, check_every=5):
         shape = (len(self.train_size), self.n_repeat)
         self.errors, self.losses, self.train_errors = np.zeros(shape), np.zeros(shape), np.zeros(shape)
         if keep:
             self.init_states = [None] * self.n_repeat
             self.trained_states = [[None] * self.n_repeat for _ in self.train_size]
+            self.fit_states = [[None] * self.n_repeat for _ in self.train_size]
+            self.fit_step = np.zeros(shape, dtype=int)
+            self.fit_errors, self.fit_losses, self.fit_train_errors = \
+                np.zeros(shape), np.zeros(shape), np.zeros(shape)
         for i, m in enumerate(self.train_size):
             for r in range(self.n_repeat):
                 X_S, y_S = self.subset(m, r)
@@ -361,16 +376,34 @@ class NetworkCurve(ConvergenceCurve):
                     if i == 0:
                         self.init_states[r] = w0
                     assert all(torch.equal(w0[k], self.init_states[r][k]) for k in w0)
-                train(net, X_S, y_S, **self.train_kw)
+
+                    # snapshot at the first check with zero training error (every check_every steps)
+                    fit = {}
+                    def snapshot(step, net, X_S=X_S, y_S=y_S, fit=fit):
+                        if not fit and step % check_every == 0 and evaluate(net, X_S, y_S)[0] == 0:
+                            fit.update(step=step, state={k: v.detach().cpu().clone()
+                                                         for k, v in net.state_dict().items()},
+                                       test=evaluate(net, self.X_D, self.y_D))
+                train(net, X_S, y_S, callback=snapshot if keep else None, **self.train_kw)
                 if keep:
                     self.trained_states[i][r] = {k: v.detach().cpu().clone()
                                                  for k, v in net.state_dict().items()}
+                    if not fit:  # never at zero training error: use the end of training
+                        fit.update(step=0, state=self.trained_states[i][r],
+                                   test=evaluate(net, self.X_D, self.y_D))
+                    self.fit_states[i][r], self.fit_step[i, r] = fit['state'], fit['step']
+                    self.fit_errors[i, r], self.fit_losses[i, r] = fit['test']
+                    snap = self.model().to(device)
+                    snap.load_state_dict(fit['state'])
+                    self.fit_train_errors[i, r] = evaluate(snap, X_S, y_S)[0]
 
                 # evaluate on the test set; train error to check convergence
                 self.errors[i, r], self.losses[i, r] = evaluate(net, self.X_D, self.y_D)
                 self.train_errors[i, r] = evaluate(net, X_S, y_S)[0]
             print(f'm = {m:6d}  error = {self.errors[i].mean():.4f}  '
-                  f'max train error = {self.train_errors[i].max():.4f}')
+                  f'max train error = {self.train_errors[i].max():.4f}' +
+                  (f'  | zero train error at step {self.fit_step[i].mean():6.0f}: '
+                   f'error = {self.fit_errors[i].mean():.4f}' if keep else ''))
 
 
 # -----------------------------------------------------------------------------

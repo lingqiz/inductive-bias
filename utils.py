@@ -508,6 +508,68 @@ def plot_phi_alpha(curves, result, metric, ylabel, m_range, colors, alpha_lim, p
     plt.show()
 
 
+def _sem(v):
+    return np.std(v) / np.sqrt(len(v))
+
+
+def plot_vs_phi(ax, fits, boot, values, colors, scale=1.0):
+    """A measure against the fitted phi of each curve: ``values`` = {name: (n_repeat,) array},
+    mean +- sem over repeats (divided by ``scale``); phi +- bootstrap sd (``fits`` / ``boot`` of
+    a :func:`fit_curves` entry).
+    """
+    for k, v in values.items():
+        v = np.asarray(v) / scale
+        ax.errorbar(fits[k].params['phi'], v.mean(), xerr=boot[k][:, 1].std(), yerr=_sem(v),
+                    color=colors[k], marker='o', markersize=8, capsize=4, label=k)
+
+
+def plot_agreement(ax, fits, boot, values, colors, lim=(0.3, 1.7), seed=0):
+    """A measure against the fitted phi, each divided by its mean over the curves: a measure
+    proportional to phi falls on the slope-1 line (the points average to (1, 1)). Error bars:
+    bootstrap sd, over repeats for the measure (the same indices for all curves) and from the fit
+    bootstrap for phi.
+    """
+    names = list(values)
+
+    def normalized(draws):
+        # {name: draws} -> draws / mean over the curves, per draw
+        mean = np.mean([draws[k] for k in names], axis=0)
+        return {k: draws[k] / mean for k in names}
+
+    n_rep = len(values[names[0]])
+    idx = np.random.default_rng(seed).integers(0, n_rep, (len(boot[names[0]]), n_rep))
+    phi_hat = normalized({k: np.array([fits[k].params['phi']]) for k in names})
+    phi_boot = normalized({k: boot[k][:, 1] for k in names})
+    est = normalized({k: np.array([np.mean(values[k])]) for k in names})
+    est_boot = normalized({k: np.asarray(values[k])[idx].mean(axis=1) for k in names})
+
+    ax.plot(lim, lim, '--', color='gray', zorder=0)
+    for k in names:
+        ax.errorbar(phi_hat[k][0], est[k][0], xerr=phi_boot[k].std(), yerr=est_boot[k].std(),
+                    color=colors[k], marker='o', markersize=8, capsize=4, label=k)
+    ax.set_xlim(*lim)
+    ax.set_ylim(*lim)
+    ax.set_aspect('equal')
+
+
+# ---------------------------------------------------------------------------------------
+# Representations: alignment of a representation with the task labels
+# ---------------------------------------------------------------------------------------
+
+def kernel_alignment(X, y):
+    """Centered kernel-target alignment (Cortes et al. 2012) of the linear kernel X X^T with the
+    label kernel Y Y^T (Y one-hot): cosine between the two centered kernels, in [0, 1]. ``X`` is
+    (n_samples, n_features), e.g. z-scored features or neural responses, and ``y`` integer labels.
+    Computed as ||Xc^T Yc||_F^2 / (||Xc^T Xc||_F ||Yc^T Yc||_F), with the smaller of the two Gram
+    matrices of Xc (same Frobenius norm), so many features (e.g. neurons) are cheap.
+    """
+    X = np.asarray(X, dtype=float)
+    Y = np.eye(int(np.max(y)) + 1)[np.asarray(y)]
+    Xc, Yc = X - X.mean(axis=0), Y - Y.mean(axis=0)
+    gram = Xc.T @ Xc if Xc.shape[1] <= Xc.shape[0] else Xc @ Xc.T
+    return np.linalg.norm(Xc.T @ Yc) ** 2 / (np.linalg.norm(gram) * np.linalg.norm(Yc.T @ Yc))
+
+
 class PiecewiseLinear:
     """.. deprecated::
         Use :class:`PACBayesCurve` or :class:`PowerLaw` for learning-curve

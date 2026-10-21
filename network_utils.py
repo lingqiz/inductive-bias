@@ -1,5 +1,5 @@
 '''
-Neural-network data scaling + pretraining simulation (MNIST, CNN), used by pretraining.ipynb;
+Neural-network data scaling + pretraining simulation (MNIST, CNN), used by pretrain_nn.ipynb;
 the simulated networks are saved in data/simulation/.
 '''
 import os
@@ -388,3 +388,53 @@ def pac_bayes_kl(dist2, sigma, k):
     (k/2) log(1 + dist2 / (k sigma^2))  (~ dist2 / (2 sigma^2) for small dist2).
     '''
     return 0.5 * k * np.log1p(dist2 / (k * sigma ** 2))
+
+
+# -----------------------------------------------------------------------------
+# Decoders on frozen representations: a linear ridge readout of the target labels
+# from the features of a (pretrained or random) network, as one would decode
+# neural recordings
+# -----------------------------------------------------------------------------
+
+# number of CNN.features modules up to each layer's output (after its ReLU and pooling)
+FEATURE_LAYERS = {'conv1': 3, 'conv2': 7, 'fc': 9}
+
+
+@torch.no_grad()
+def frozen_features(state, X, layer='fc', batch_size=4096):
+    # flattened features at `layer` (FEATURE_LAYERS) of the CNN with weights `state` (its head is not used)
+    f = cnn_from_state(state).eval().features[:FEATURE_LAYERS[layer]]
+    return torch.cat([f(X[i:i + batch_size]).flatten(1) for i in range(0, len(X), batch_size)])
+
+
+def zscore(X_train, *others, eps=1e-6):
+    # z-score each feature with the training-set mean / sd; applies the same transform to `others`
+    mu, sd = X_train.mean(0), X_train.std(0) + eps
+    return [(X - mu) / sd for X in (X_train, *others)]
+
+
+def ridge_probe(X, y, n_classes, lambdas=np.logspace(-2, 6, 33)):
+    '''
+    Linear ridge-regression decoder of the class labels (one-hot targets coded +-1, with an
+    unpenalized intercept) from features X, the ridge strength chosen by leave-one-out
+    cross-validation of the squared error (closed form, from the SVD of the centered X).
+    Returns (nn.Linear decoder on device, chosen lambda).
+    '''
+    X = X.double()
+    Y = 2 * F.one_hot(y, n_classes).double() - 1
+    x_mean, y_mean = X.mean(0), Y.mean(0)
+    U, s, Vt = torch.linalg.svd(X - x_mean, full_matrices=False)
+    UtY = U.T @ (Y - y_mean)
+
+    def loo(lam):
+        d = s ** 2 / (s ** 2 + lam)
+        resid = (Y - y_mean) - U @ (d[:, None] * UtY)
+        h = (U ** 2 * d).sum(1) + 1 / len(X)  # leverage, including the intercept
+        return (resid / (1 - h)[:, None]).pow(2).mean().item()
+
+    lam = min(lambdas, key=loo)
+    W = Vt.T @ ((s / (s ** 2 + lam))[:, None] * UtY)  # (n_features, n_classes)
+    probe = nn.Linear(X.shape[1], n_classes).to(device)
+    probe.weight.data = W.T.float().contiguous()
+    probe.bias.data = (y_mean - x_mean @ W).float()
+    return probe, lam

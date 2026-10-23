@@ -1,5 +1,113 @@
 # Estimating the action-policy KL (`kl.py`)
 
+## OPEN PROBLEM (2026-10-22): build a proper generative model of p(action | stimulus)
+
+**Next step:** think through how to build a real generative model of the movement, starting
+with one that describes the **side bias through the movement itself**. The choice term
+correlates with φ far more strongly than anything else (log-Pearson r = 0.82). So the first
+job of a movement model is to produce p(choice | stimulus) from the trajectory, not take it
+as given.
+
+### What is wrong with the current estimator
+
+`measure_trial` folds every trace by the mouse's own choice (`trace * response_side`), and
+`PolicyKL` then fits one distribution per stimulus side to the folded pool. Correct and error
+turns get mirrored into one pile. That mirroring is the mistake:
+
+- From the mouse's side there is one policy p(x | s) over the raw trajectory x, and it is
+  **bimodal** (left-crossing vs right-crossing turns). There is one KL,
+  KL[ p(x | s) ‖ q(x | s) ], with p = trained and q = naive.
+- Mirroring assumes a left turn mirrored looks like a right turn. Turning is probably not
+  symmetric (posture, paw preference), so the pool mixes two different shapes. When the
+  mix of turns changes over training (a naive side bias that goes away), the pooled shape
+  changes even if neither turn did. The choice shift then shows up a second time inside the
+  trajectory term.
+- `total = choice + joint` was only an approximation, which can be off in either direction.
+  Section 4 of the notebook plots `joint` alone.
+
+### What we tried (scratch tests, 60-mouse cohort, R² ≥ 0.25 → n = 58)
+
+**1. Exact chain rule, no folding.** The choice c is a function of x (the side of threshold
+the trajectory crosses), so the full-trajectory KL splits exactly:
+
+    KL[p(x|s) ‖ q(x|s)] = KL[p(c|s) ‖ q(c|s)] + Σ_c p(c|s) · KL[p(x|c,s) ‖ q(x|c,s)]
+
+The terms are computed on signed traces, each (s, c) cell with its own PCA (K = 64, diag,
+unbiased). This is the KL of a two-mode mixture whose modes are the turn directions, so no
+information is removed and no experimenter label is used. Results:
+
+- Noise floor (reshuffled trials): median 1.5 bits, 1.8% of the signal.
+- Ranking of mice is almost unchanged from the old total (Spearman 0.94), but single mice
+  moved by up to 25–65%, in both directions.
+- Trained-end error cells with fewer than 20 trials were skipped. That happened in about
+  half the mice, and each skipped cell carried weight ≤ 0.02.
+
+**2. Unlabeled generative model.** A two-component mixture of probabilistic PCA per (mouse,
+s, end) on [log onset, log duration, signed trace at 25 pts], with latent dimension by
+held-out likelihood and KL from held-out log-likelihood ratios. It **failed**:
+
+- The components do not find the turn direction (they match the choice 62% of the time,
+  median); they split along some larger axis, probably post-response movement.
+- Held-out likelihood picks full rank (26/26) in 77% of fits, so the noise term never sets a
+  resolution.
+- Noisy per mouse: null SD 2.7 bits against a median KL of 14 bits, and 5 mice came out
+  negative.
+
+| term | log-Pearson r with φ | Spearman ρ |
+|---|---|---|
+| choice | 0.82 | 0.80 |
+| old: choice + folded joint | 0.41 | 0.35 |
+| chain rule, full trajectory KL | 0.39 | 0.33 |
+| chain rule, trajectory part only | 0.38 | 0.32 |
+| unlabeled MPPCA KL | 0.21 (n = 53) | 0.22 |
+
+Partial Spearman of the movement part with φ, controlling for choice: −0.05 (chain rule)
+and −0.05 (MPPCA). The movement adds nothing beyond choice under any estimator so far.
+
+Scripts and per-mouse CSVs: the session scratchpad (`kl_traj/analyze.py`, `kl_traj/mfa.py`,
+`kl_traj_vs_phi.csv`, `kl_mfa_vs_phi.csv`); not in the repo. `kl.py` / `wheel.py` still fold.
+
+### Why the magnitude problem points to a model
+
+The full-trajectory KL is about 80 bits, almost all from many small motor dimensions where
+the trained mouse's turns become stereotyped. Choice is one binary dimension, about 1 bit, and
+it gets swamped. KL can only grow as the description gets finer (choice ≤ choice + onset/
+duration ≤ … ≤ all PCs), and it kept growing linearly with K. So "the" KL depends on the
+resolution we pick. Under PAC-Bayes the loss (error rate) depends only on which side the wheel
+crosses, so motor stereotypy costs KL without lowering error. It is likely motor practice, a
+separate process from the learning φ measures. A generative model with an explicit noise /
+latent structure is the principled way to set that resolution, but the quick test above did
+not get there.
+
+### Design notes for the model
+
+- **Choice must emerge from the movement.** The model generates trajectories; the choice is
+  read off as the side of threshold crossed. Check: posterior-predictive p(c | s) matches
+  the data at both ends, and the model's KL at the choice level reproduces the choice KL.
+- **The side bias should live in a movement variable.** For example, a low-dimensional latent
+  for initial movement direction / early velocity (the first ~100–200 ms after onset), whose
+  distribution given s carries the bias as an offset and the discrimination as an
+  s-dependent shift. Changes of mind (start one way, cross the other) should come out of it,
+  not be cut away.
+- **Bias vs discrimination.** The earlier decision decomposition (`cohort_decision_decomp.csv`)
+  found that the marginal side bias is only ~7% (median) of the choice KL, and discrimination
+  I(stim; choice) is ~90%. The model has to capture both, and we should check which of the two
+  carries the φ correlation before building around "bias".
+- **Starting-accuracy caveat.** The choice KL is close to a re-encoding of starting accuracy
+  (trained accuracy is ~constant across mice), so its correlation with φ is near-tautological.
+  A movement model is worth it only if it gives something beyond that, e.g. a bias/
+  discrimination signal visible in the movement before the choice is committed.
+- **Representation.** Use real time aligned to movement onset rather than the time-normalized
+  trace (the normalization uses response time, which is itself an outcome). Separate the
+  post-response tail; it is large and was probably what the unlabeled mixture split on.
+- **Lessons from the MPPCA test.** An unlabeled mixture only helps if it recovers the turn
+  modes; give it the structure (direction as a latent) instead of hoping EM finds it. Cross-fit
+  symmetrically (both models fit on the same number of trials), or the null goes negative.
+  Run fits single-threaded (`OMP_NUM_THREADS=1`) when the machine is shared, since thread
+  contention made each fit about 7× slower.
+
+---
+
 This note documents *why* estimating the naive→trained action-policy KL is hard, the methods
 we considered, what `PolicyKL` actually does, and the empirical calibration (reliability +
 null floor) we measured. It's the reasoning behind the code in `kl.py`.

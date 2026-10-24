@@ -1,5 +1,5 @@
 ### Simulation and Data Analysis Code
-Inductive bias anchors a scalping law for biological learning  
+*Inductive bias anchors a scalping law for biological learning*   
 Zhang et al., 2026
 
 - Simulation of learning curves for simple models and neural network pretraining

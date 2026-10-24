@@ -1,7 +1,6 @@
-TODO: 
-refactor code for doing simulation (dist.py + utils.py) -> theory.py
-the outside utils.py should be used for curve fitting + model simulation
+### Simulation and Data Analysis Code
+Zhang et al., 2026
 
-dataset specific analysis code should be pushed into data/...
-
-add an /analysis folder to keep track of important notebooks
+- Simulation of learning curves for simple models and neural network pretraining
+- Analysis the IBL learning curve data from IBL et al., eLife (2022)
+- Analysis the motor learning data from Wu et al., Nat Neuro (2014)

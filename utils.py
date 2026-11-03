@@ -197,10 +197,32 @@ class PACBayesCurve(_LearningCurve):
 
     Fitted parameters are phi > 0 (complexity scale) and alpha > 0 (exponent); see
     :class:`_LearningCurve` for floor / cap / loss / bounds / multistart.
+
+    The curve is written with phi in nats. ``bits=True`` reports the fitted phi in
+    bits, ``params['phi'] = phi_nats / ln 2``; the fit itself is unchanged and runs in
+    nats, so ``bounds`` and ``p0`` stay in nats. ``predict`` converts back.
     """
 
     PARAMS = ('phi', 'alpha')
     BOUNDS = {'phi': (0.0, np.inf), 'alpha': (0.0, np.inf)}
+
+    def __init__(self, *args, bits=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.bits = bits
+
+    def fit(self, m, y, p0=None):
+        super().fit(m, y, p0)
+        self._phi_nats = self.params['phi']          # kept so predict() is exact
+        if self.bits:
+            self.params['phi'] = self._phi_nats / np.log(2)
+        return self
+
+    def predict(self, m):
+        """Predicted error rate at trial counts ``m`` (uses phi in nats)."""
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet. Call fit() first.")
+        p = {**self.params, 'phi': self._phi_nats}
+        return self._curve(m, *[p[k] for k in self._names()])
 
     def _g(self, m, f, phi, alpha):
         return f + (2.0 / 3.0) * phi / m + _safe_pow(2.0 * phi / m, alpha)

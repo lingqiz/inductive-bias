@@ -6,7 +6,7 @@ cache/
 *.ipynb
 *.mat
 .DS_Store
-/archive/poster
+/archive
 /notes
 /data/vision/
 /data/simulation/
